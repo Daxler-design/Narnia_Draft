@@ -157,7 +157,15 @@ if __name__ == "__main__":
         with open(PROFILE_PATH, "r") as f:
             meta = json.load(f)
         _, _, b_max, b_min = core.meta_data_info(meta)
-        narnia_vis.run_app_from_data(fields_2d_result, b_min, b_max, iso_level=ISO_LEVEL, profile_fields=profile_fields, iso_p=iso_p)
+        narnia_vis.run_app_from_data(
+            fields_2d_result,
+            b_min,
+            b_max,
+            iso_level=ISO_LEVEL,
+            profile_fields=profile_fields,
+            iso_p=iso_p,
+            output_dir=OUTPUT,
+        )
 
 
    
