@@ -4,6 +4,9 @@
 
 This is a **Signed Distance Field (SDF) post-processing pipeline** for architectural brace/structural bracing design. The workflow processes volumetric SDF data stored in JSON format, performs geometric operations, generates Voronoi-based bracing patterns, and exports results for downstream use.
 
+## Setup
+- Install runtime dependencies with `pip install -r requirements.txt` before running the scripts or viewer from another machine.
+
 ## Architecture & Data Flow
 
 ```
