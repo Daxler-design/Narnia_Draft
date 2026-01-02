@@ -74,3 +74,27 @@ vis_utils.py: Pure geometry and data transformation logic (Open3D/NumPy)
 vis_widgets.py: Reusable Open3D GUI component factories.
 
 narnia_vis.py: The main application class focusing on layout and event orchestration.
+
+## Monitor detection and GPU preference
+
+
+1.  **vis_utils.py**:
+    *   Now handles all environment variable setup (thread capping, software GL) at the very top of the file.
+    *   Contains the user configuration constants: `PREFERRED_MONITOR_INDEX`, `HEADLESS_MODE`, `FORCE_SOFTWARE_GL`.
+    *   Includes the `print_system_diagnostics()` function.
+
+2.  **main.py**:
+    *   Removed all environment variable definitions and helper functions.
+    *   Imports `vis_utils` (as `vut`) immediately to ensure the environment is configured before `numpy` or `core` are loaded.
+    *   Uses `vut.HEADLESS_MODE` and `vut.PREFERRED_MONITOR_INDEX` to control execution flow.
+    *   Re-added the `threadpool_limits` context manager for extra safety during the heavy computation step.
+
+This structure is much cleaner and centralizes the "system setup" logic within the utility module, as requested. You can now adjust settings like `HEADLESS_MODE` directly in vis_utils.py if needed.
+
+
+**Performace switch**
+```
+# dGPU likely present: allow more threads for performance
+os.environ["OMP_NUM_THREADS"] = "4"
+os.environ["MKL_NUM_THREADS"] = "4"
+```
