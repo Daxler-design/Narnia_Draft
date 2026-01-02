@@ -63,3 +63,14 @@ flowchart TB
     M --> N["Open3D / interactive GUI"]
     N --> G["User tweaks"]
   end
+```
+
+
+---
+## break narnia_vis.py to small piece
+
+vis_utils.py: Pure geometry and data transformation logic (Open3D/NumPy)
+
+vis_widgets.py: Reusable Open3D GUI component factories.
+
+narnia_vis.py: The main application class focusing on layout and event orchestration.
