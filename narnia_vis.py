@@ -9,155 +9,11 @@ import open3d.visualization.gui as gui
 import open3d.visualization.rendering as rendering
 
 import core
-
-
-def generate_mesh_from_curves(all_curves, bounds_min, bounds_max):
-    """Placeholder for future mesh generation."""
-    raise NotImplementedError("Mesh generation from curves is not implemented yet.")
-
-
-def _normalize_to_u8(img_2d: np.ndarray) -> np.ndarray:
-    arr = np.asarray(img_2d, dtype=float)
-    finite = np.isfinite(arr)
-    if not np.any(finite):
-        return np.zeros(arr.shape, dtype=np.uint8)
-
-    vmin = np.percentile(arr[finite], 2)
-    vmax = np.percentile(arr[finite], 98)
-    if vmax <= vmin:
-        vmax = vmin + 1.0
-
-    scaled = (np.clip(arr, vmin, vmax) - vmin) / (vmax - vmin)
-    return (scaled * 255.0).astype(np.uint8)
-
-
-def _curves_to_lineset(curves_2d: list[np.ndarray], z: float) -> Optional[o3d.geometry.LineSet]:
-    points = []
-    lines = []
-    cursor = 0
-    for curve in curves_2d:
-        curve = np.asarray(curve, dtype=float)
-        if curve.ndim != 2 or curve.shape[0] < 2:
-            continue
-        pts3 = np.column_stack([curve[:, 0], curve[:, 1], np.full(curve.shape[0], z)])
-        points.append(pts3)
-        lines.extend([[cursor + i, cursor + i + 1] for i in range(curve.shape[0] - 1)])
-        cursor += curve.shape[0]
-
-    if not points or not lines:
-        return None
-
-    pts = np.vstack(points)
-    ls = o3d.geometry.LineSet()
-    ls.points = o3d.utility.Vector3dVector(pts)
-    ls.lines = o3d.utility.Vector2iVector(np.asarray(lines, dtype=np.int32))
-    return ls
-
-
-def _make_textured_plane(bounds_min, bounds_max, z: float):
-    x0, y0 = float(bounds_min[0]), float(bounds_min[1])
-    x1, y1 = float(bounds_max[0]), float(bounds_max[1])
-    verts = np.array(
-        [
-            [x0, y0, z],
-            [x1, y0, z],
-            [x1, y1, z],
-            [x0, y1, z],
-        ],
-        dtype=np.float64,
-    )
-    tris = np.array([[0, 1, 2], [0, 2, 3]], dtype=np.int32)
-    uvs = np.array(
-        [
-            [0.0, 0.0],
-            [1.0, 0.0],
-            [1.0, 1.0],
-            [0.0, 1.0],
-        ],
-        dtype=np.float64,
-    )
-
-    mesh = o3d.geometry.TriangleMesh()
-    mesh.vertices = o3d.utility.Vector3dVector(verts)
-    mesh.triangles = o3d.utility.Vector3iVector(tris)
-    mesh.triangle_uvs = o3d.utility.Vector2dVector(uvs[[0, 1, 2, 0, 2, 3]])
-    mesh.compute_triangle_normals()
-    return mesh
-
-
-def _scalar_to_overlay_colors(values_2d: np.ndarray, opacity: float, bg_rgb=(0.07, 0.07, 0.07)) -> np.ndarray:
-    """Map scalar values to grayscale RGB, blended with background by `opacity`.
-
-    Open3D point clouds don't reliably support per-vertex alpha in all backends,
-    so we approximate opacity by blending against the background color.
-    """
-    opacity = float(np.clip(opacity, 0.0, 1.0))
-    u8 = _normalize_to_u8(values_2d)
-    gray = (u8.astype(np.float32) / 255.0)
-    rgb = np.stack([gray, gray, gray], axis=-1)
-    bg = np.array(bg_rgb, dtype=np.float32).reshape((1, 1, 3))
-    blended = rgb * opacity + bg * (1.0 - opacity)
-    return blended.reshape((-1, 3)).astype(np.float32)
+import vis_utils as vut
+import vis_widgets as vwg
 
 
 class NarniaCurveViewer:
-    def _create_slider_row(self, label_text, min_val, max_val, init_val, on_change_callback, is_int=False):
-        v = gui.Vert(0, gui.Margins(0, 0, 0, 0))
-        v.add_child(gui.Label(label_text))
-        h = gui.Horiz(5)
-        
-        num_edit = gui.NumberEdit(gui.NumberEdit.INT if is_int else gui.NumberEdit.DOUBLE)
-        slider = gui.Slider(gui.Slider.INT if is_int else gui.Slider.DOUBLE)
-        slider.set_limits(min_val, max_val)
-
-        if is_int:
-            num_edit.int_value = int(init_val)
-            slider.int_value = int(init_val)
-        else:
-            num_edit.double_value = float(init_val)
-            slider.double_value = float(init_val)
-
-        def on_slider(val):
-            if is_int:
-                num_edit.int_value = int(val)
-            else:
-                num_edit.double_value = float(val)
-            if on_change_callback:
-                on_change_callback(val)
-
-        def on_edit(val):
-            if is_int:
-                slider.int_value = int(val)
-            else:
-                slider.double_value = float(val)
-            if on_change_callback:
-                on_change_callback(val)
-
-        slider.set_on_value_changed(on_slider)
-        num_edit.set_on_value_changed(on_edit)
-        
-        h.add_child(num_edit)
-        h.add_child(slider)
-        v.add_child(h)
-        return v, slider, num_edit
-
-    def _create_file_input_row(self, label_text, default_path, on_browse_callback):
-        v = gui.Vert(0, gui.Margins(0, 0, 0, 0))
-        v.add_child(gui.Label(label_text))
-        h = gui.Horiz(4)
-        
-        tedit = gui.TextEdit()
-        tedit.text_value = default_path
-        
-        btn = gui.Button("...")
-        btn.horizontal_padding_em = 0.5
-        btn.set_on_clicked(on_browse_callback)
-        
-        h.add_child(tedit)
-        h.add_child(btn)
-        v.add_child(h)
-        return v, tedit
-
     def __init__(self):
         self._base_dir = Path.cwd()
         self._window = gui.Application.instance.create_window("Narnia Viewer", 1400, 900)
@@ -189,14 +45,14 @@ class NarniaCurveViewer:
         self._compute_panel = gui.Vert(0, gui.Margins(10, 10, 10, 10))
 
         # Profile Path
-        row_prof, self._profile_path = self._create_file_input_row(
+        row_prof, self._profile_path = vwg.create_file_input_row(
             "Profile JSON path", 
             "./alice_result/251120/ext/waveStackFields.json",
             self._on_select_profile
         )
 
         # Bracing Path
-        row_brac, self._bracing_path = self._create_file_input_row(
+        row_brac, self._bracing_path = vwg.create_file_input_row(
             "Bracing JSON path",
             "./alice_result/251120/bracing/waveStackFields.json",
             self._on_select_bracing
@@ -208,7 +64,7 @@ class NarniaCurveViewer:
         self._chk_generate_bracing.set_on_checked(self._on_generate_toggled)
 
         # Num Centroids Slider (Limit 1-6)
-        row_k, self._num_centroids_slider, self._num_centroids_edit = self._create_slider_row(
+        row_k, self._num_centroids_slider, self._num_centroids_edit = vwg.create_slider_row(
             "Num Centroids", 1, 6, 5, None, is_int=True
         )
 
@@ -221,17 +77,17 @@ class NarniaCurveViewer:
         self._op_mode_combo.set_on_selection_changed(self._on_boolean_param_changed)
 
         # Profile Offset
-        row_poff, self._profile_offset_slider, self._profile_offset_edit = self._create_slider_row(
+        row_poff, self._profile_offset_slider, self._profile_offset_edit = vwg.create_slider_row(
             "Profile Offset", -2.0, 2.0, 0.0, self._on_boolean_param_changed
         )
 
         # Bracing Offset
-        row_boff, self._bracing_offset_slider, self._bracing_offset_edit = self._create_slider_row(
+        row_boff, self._bracing_offset_slider, self._bracing_offset_edit = vwg.create_slider_row(
             "Bracing Offset", -2.0, 2.0, 0.0, self._on_boolean_param_changed
         )
 
         # Result Iso (Compute)
-        row_c_iso, self._c_iso_slider, self._c_iso_edit = self._create_slider_row(
+        row_c_iso, self._c_iso_slider, self._c_iso_edit = vwg.create_slider_row(
             "Result Iso threshold", -2.0, 2.0, 0.0, self._on_iso_changed
         )
 
@@ -258,7 +114,7 @@ class NarniaCurveViewer:
         self._viewer_panel = gui.Vert(0, gui.Margins(10, 10, 10, 10))
         
         # NPZ Path
-        row_npz, self._npz_path = self._create_file_input_row(
+        row_npz, self._npz_path = vwg.create_file_input_row(
             "NPZ File Path",
             "./output/processed_sdf_results.npz",
             self._on_select_npz
@@ -272,7 +128,7 @@ class NarniaCurveViewer:
         self._n_view_selector.set_on_selection_changed(self._on_view_channel_changed)
 
         # Result Iso (NPZ)
-        row_n_iso, self._n_iso_slider, self._n_iso_edit = self._create_slider_row(
+        row_n_iso, self._n_iso_slider, self._n_iso_edit = vwg.create_slider_row(
             "Result Iso threshold", -1.0, 1.0, 0.0, self._on_iso_changed
         )
 
@@ -787,13 +643,6 @@ class NarniaCurveViewer:
         self._status.text = "Data loaded. Use slice/iso controls."
         self._update_scene(fit_camera=True)
 
-    def _slice_z(self, slice_index: int, num_fields: int, bounds_min, bounds_max) -> float:
-        z0 = float(bounds_min[2])
-        z1 = float(bounds_max[2])
-        if num_fields <= 1:
-            return z0
-        return z0 + (z1 - z0) * (slice_index / (num_fields - 1))
-
     def _update_scene(self, fit_camera: bool):
         idx_tab = self._tabs.selected_tab_index
         
@@ -844,7 +693,7 @@ class NarniaCurveViewer:
             return
 
         idx = int(self._slice_slider.int_value)
-        z = self._slice_z(idx, res.shape[0], bmin, bmax)
+        z = vut.slice_z(idx, res.shape[0], bmin, bmax)
 
         # Remove old geometries
         for name in ["curves", "profile", "bracing", "overlay"]:
@@ -862,7 +711,7 @@ class NarniaCurveViewer:
         # 1. Extract and show Main Curves
         slice_2d = res[idx].reshape((ny, nx))
         curves = core.iso_curves_for_slice_2d(slice_2d, iso, X, Y)
-        ls = _curves_to_lineset(curves, z)
+        ls = vut.curves_to_lineset(curves, z)
         if ls is not None:
             self._curves_geom = ls
             mat = rendering.MaterialRecord()
@@ -876,7 +725,7 @@ class NarniaCurveViewer:
             off_p = self._profile_offset_slider.double_value if idx_tab == 0 else 0.0
             p_slice_2d = prof[idx].reshape((ny, nx))
             p_curves = core.iso_curves_for_slice_2d(p_slice_2d, iso_p_base + off_p, X, Y)
-            p_ls = _curves_to_lineset(p_curves, z)
+            p_ls = vut.curves_to_lineset(p_curves, z)
             if p_ls is not None:
                 self._profile_geom = p_ls
                 p_mat = rendering.MaterialRecord()
@@ -890,7 +739,7 @@ class NarniaCurveViewer:
             off_b = self._bracing_offset_slider.double_value if idx_tab == 0 else 0.0
             b_slice_2d = brac[idx].reshape((ny, nx))
             b_curves = core.iso_curves_for_slice_2d(b_slice_2d, iso_b_base + off_b, X, Y)
-            b_ls = _curves_to_lineset(b_curves, z)
+            b_ls = vut.curves_to_lineset(b_curves, z)
             if b_ls is not None:
                 self._bracing_geom = b_ls
                 b_mat = rendering.MaterialRecord()
