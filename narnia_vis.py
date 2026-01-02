@@ -14,9 +14,22 @@ import vis_widgets as vwg
 
 
 class NarniaCurveViewer:
-    def __init__(self):
+    def __init__(self, monitor_index: int = 0):
         self._base_dir = Path.cwd()
-        self._window = gui.Application.instance.create_window("Narnia Viewer", 1400, 900)
+        
+        x, y = 0, 0
+        try:
+            monitors = vut.get_monitors_info()
+            if 0 <= monitor_index < len(monitors):
+                rect = monitors[monitor_index]["rect"]
+                x, y = rect[0], rect[1]
+                # Add a small offset to ensure it's visible
+                x += 50
+                y += 50
+        except Exception as e:
+            print(f"Could not get monitor info: {e}")
+
+        self._window = gui.Application.instance.create_window("Narnia Viewer", 1400, 900, x, y)
 
         self._scene_widget = gui.SceneWidget()
         self._scene_widget.scene = rendering.Open3DScene(self._window.renderer)
@@ -793,10 +806,11 @@ def run_app(
     bracing_json_path: str = "./alice_result/251120/bracing/waveStackFields.json",
     profile_json_path: str = "./alice_result/251120/ext/waveStackFields.json",
     output_dir: str = "./output",
+    monitor_index: int = 0,
 ):
     app = gui.Application.instance
     app.initialize()
-    viewer = NarniaCurveViewer()
+    viewer = NarniaCurveViewer(monitor_index=monitor_index)
     viewer._bracing_path.text_value = bracing_json_path
     viewer._profile_path.text_value = profile_json_path
     viewer._output_dir.text_value = output_dir
@@ -811,10 +825,11 @@ def run_app_from_data(
     profile_fields: Optional[np.ndarray] = None,
     iso_p: float = 0.0,
     output_dir: str = "./output",
+    monitor_index: int = 0,
 ):
     app = gui.Application.instance
     app.initialize()
-    viewer = NarniaCurveViewer()
+    viewer = NarniaCurveViewer(monitor_index=monitor_index)
     viewer._output_dir.text_value = output_dir
     # Defer scene updates until the GUI main thread is running.
     gui.Application.instance.post_to_main_thread(
@@ -824,22 +839,22 @@ def run_app_from_data(
     app.run()
 
 
-if __name__ == "__main__":
-    # If an output NPZ exists, use it; otherwise allow the user to compute from JSON in the UI.
-    output_path = Path("./output/processed_sdf_results.npz")
-    profile_json_path = Path("./alice_result/251120/ext/waveStackFields.json")
+# if __name__ == "__main__":
+#     # If an output NPZ exists, use it; otherwise allow the user to compute from JSON in the UI.
+#     output_path = Path("./output/processed_sdf_results.npz")
+#     profile_json_path = Path("./alice_result/251120/ext/waveStackFields.json")
 
-    if output_path.exists() and profile_json_path.exists():
-        data = np.load(output_path, allow_pickle=True)
-        result_fields = data["result_fields"]
-        iso_level = float(data["iso_level"])
-        with open(profile_json_path, "r") as f:
-            meta = json.load(f)
-        iso_p, _, bounds_max, bounds_min = core.meta_data_info(meta)
+#     if output_path.exists() and profile_json_path.exists():
+#         data = np.load(output_path, allow_pickle=True)
+#         result_fields = data["result_fields"]
+#         iso_level = float(data["iso_level"])
+#         with open(profile_json_path, "r") as f:
+#             meta = json.load(f)
+#         iso_p, _, bounds_max, bounds_min = core.meta_data_info(meta)
         
-        # Try to load profile fields for preview if they exist in the same folder as the JSON
-        profile_fields, _ = core.stack_scalar_fields(meta)
+#         # Try to load profile fields for preview if they exist in the same folder as the JSON
+#         profile_fields, _ = core.stack_scalar_fields(meta)
         
-        run_app_from_data(result_fields, bounds_min, bounds_max, iso_level=iso_level, profile_fields=profile_fields, iso_p=iso_p)
-    else:
-        run_app()
+#         run_app_from_data(result_fields, bounds_min, bounds_max, iso_level=iso_level, profile_fields=profile_fields, iso_p=iso_p)
+#     else:
+#         run_app()

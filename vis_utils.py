@@ -1,6 +1,74 @@
+import os
+
+# --- 1. STABILITY & GPU SETTINGS ---
+# Cap common thread pools to prevent system-wide freezes on Windows
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["NUMEXPR_NUM_THREADS"] = "1"
+os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
+os.environ["BLIS_NUM_THREADS"] = "1"
+
+# --- 2. USER CONFIGURATION ---
+PREFERRED_MONITOR_INDEX = 1  # Try 1 for external (dGPU), 0 for laptop (iGPU)
+HEADLESS_MODE = False        # Set to True if the 3D viewer freezes your PC
+FORCE_SOFTWARE_GL = False    # Set to True to attempt CPU rendering (requires Mesa)
+
+if FORCE_SOFTWARE_GL:
+    os.environ["LIBGL_ALWAYS_SOFTWARE"] = "1"
+    os.environ["GALLIUM_DRIVER"] = "llvmpipe"
+
 import numpy as np
 import open3d as o3d
 from typing import Optional
+import ctypes
+from ctypes import wintypes
+
+def print_system_diagnostics():
+    print("--- System Diagnostics ---")
+    try:
+        monitors = get_monitors_info()
+        print(f"Detected {len(monitors)} monitor(s):")
+        for i, m in enumerate(monitors):
+            status = "(Primary/Laptop)" if m["is_primary"] else "(Secondary/External)"
+            print(f"  [{i}] {status} Bounds: {m['rect']}")
+    except Exception as e:
+        print(f"Could not detect monitors: {e}")
+    print("--------------------------\n")
+
+def get_monitors_info():
+    """Returns a list of monitor information dictionaries using Windows API."""
+    monitors = []
+    
+    # Define callback for EnumDisplayMonitors
+    def callback(hMonitor, hdcMonitor, lprcMonitor, dwData):
+        rect = lprcMonitor.contents
+        
+        class MONITORINFO(ctypes.Structure):
+            _fields_ = [
+                ("cbSize", wintypes.DWORD),
+                ("rcMonitor", wintypes.RECT),
+                ("rcWork", wintypes.RECT),
+                ("dwFlags", wintypes.DWORD),
+            ]
+        
+        info = MONITORINFO()
+        info.cbSize = ctypes.sizeof(MONITORINFO)
+        ctypes.windll.user32.GetMonitorInfoW(hMonitor, ctypes.byref(info))
+        
+        is_primary = bool(info.dwFlags & 1) # MONITORINFOF_PRIMARY
+        
+        monitors.append({
+            "rect": (rect.left, rect.top, rect.right, rect.bottom),
+            "is_primary": is_primary
+        })
+        return True
+
+    # Define the callback type
+    MONITORENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HMONITOR, wintypes.HDC, ctypes.POINTER(wintypes.RECT), wintypes.LPARAM)
+    
+    ctypes.windll.user32.EnumDisplayMonitors(None, None, MONITORENUMPROC(callback), 0)
+    return monitors
 
 def generate_mesh_from_curves(all_curves, bounds_min, bounds_max):
     """Placeholder for future mesh generation."""
