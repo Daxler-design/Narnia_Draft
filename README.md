@@ -6,12 +6,15 @@ Short overview
 Quick start (Windows)
 - From project root:
     python main.py
-- Key toggles in `main.py`: GENERATE_BRACING, NUM_CENTROIDS, SAVE_RESULTS, EXTRACT_CURVES, LAUNCH_VIEWER.
+- Key toggles in `main.py`: GENERATE_BRACING, NUM_CENTROIDS, SAVE_RESULTS, EXTRACT_CURVES.
+- Viewer configuration in `vis_utils.py`: PREFERRED_MONITOR_INDEX, HEADLESS_MODE.
 
 Core modules
-- main.py — pipeline launcher, CLI/headless execution.
+- main.py — pipeline launcher, CLI/headless execution. Imports `vis_utils` early for environment setup.
 - core.py — parsing, stacking, boolean ops, mask/centroid generation, Voronoi SDF, iso-curve extraction.
-- narnia_vis.py — viewer integration (run_app_from_data).
+- narnia_vis.py — Main viewer application class focusing on layout and event orchestration.
+- vis_utils.py — Environment setup (threading, GL), user configuration, and geometry/data transformation logic.
+- vis_widgets.py — Reusable Open3D GUI component factories.
 - notebook_test/ — interactive notebooks and prototyping helpers.
 
 Data formats
@@ -27,9 +30,17 @@ Workflow (conceptual)
 - Optional iso-curve extraction per slice (matplotlib contour).
 - Save .npz and optionally launch viewer.
 
+Configuration & Performance
+- **vis_utils.py**: Centralizes system setup.
+    - `PREFERRED_MONITOR_INDEX`: Set to 1 for external dGPU, 0 for laptop iGPU.
+    - `HEADLESS_MODE`: Set to True to skip viewer launch (useful for batch processing or if viewer freezes).
+    - `FORCE_SOFTWARE_GL`: Set to True to attempt CPU rendering (requires Mesa).
+    - Thread capping: Automatically sets `OMP_NUM_THREADS` etc. to "1" to prevent system freezes on Windows.
+- **Performance**: For dGPU systems, you can manually increase thread limits in `vis_utils.py` if stability is confirmed.
+
 Developer notes
 - Validate grid: call `core.infer_grid_from_scalar_fields()` early.
-- KMeans on Windows: set `os.environ["OMP_NUM_THREADS"]="1"` if using sklearn.
+- System Diagnostics: `vis_utils.print_system_diagnostics()` runs on startup to help debug monitor detection.
 - Iso-curve extraction closes matplotlib figures to avoid leaks.
 - Keep previous centroids between slices to stabilize KMeans (`prev_centroids` in main.py).
 
@@ -63,38 +74,4 @@ flowchart TB
     M --> N["Open3D / interactive GUI"]
     N --> G["User tweaks"]
   end
-```
-
-
----
-## break narnia_vis.py to small piece
-
-vis_utils.py: Pure geometry and data transformation logic (Open3D/NumPy)
-
-vis_widgets.py: Reusable Open3D GUI component factories.
-
-narnia_vis.py: The main application class focusing on layout and event orchestration.
-
-## Monitor detection and GPU preference
-
-
-1.  **vis_utils.py**:
-    *   Now handles all environment variable setup (thread capping, software GL) at the very top of the file.
-    *   Contains the user configuration constants: `PREFERRED_MONITOR_INDEX`, `HEADLESS_MODE`, `FORCE_SOFTWARE_GL`.
-    *   Includes the `print_system_diagnostics()` function.
-
-2.  **main.py**:
-    *   Removed all environment variable definitions and helper functions.
-    *   Imports `vis_utils` (as `vut`) immediately to ensure the environment is configured before `numpy` or `core` are loaded.
-    *   Uses `vut.HEADLESS_MODE` and `vut.PREFERRED_MONITOR_INDEX` to control execution flow.
-    *   Re-added the `threadpool_limits` context manager for extra safety during the heavy computation step.
-
-This structure is much cleaner and centralizes the "system setup" logic within the utility module, as requested. You can now adjust settings like `HEADLESS_MODE` directly in vis_utils.py if needed.
-
-
-**Performace switch**
-```
-# dGPU likely present: allow more threads for performance
-os.environ["OMP_NUM_THREADS"] = "4"
-os.environ["MKL_NUM_THREADS"] = "4"
 ```
