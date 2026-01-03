@@ -6,7 +6,7 @@ Short overview
 Quick start (Windows)
 - From project root:
     python main.py
-- Key toggles in `main.py`: GENERATE_BRACING, NUM_CENTROIDS, SAVE_RESULTS, EXTRACT_CURVES.
+- Key toggles in `main.py`: GENERATE_BRACING, NUM_CENTROIDS_START, NUM_CENTROIDS_END, SAVE_RESULTS, EXTRACT_CURVES.
 - Viewer configuration in `vis_utils.py`: PREFERRED_MONITOR_INDEX, HEADLESS_MODE.
 
 Core modules
@@ -24,7 +24,7 @@ Data formats
 
 Workflow (conceptual)
 - Load profile JSON (required) and bracing JSON (optional).
-- Optionally generate bracing per-slice from profile: mask -> KMeans centroids -> constrain -> Voronoi SDF.
+- Optionally generate bracing: mask -> 3D Smooth Trajectories (Fixed Kmax) -> Weighted Voronoi SDF.
 - Validate shapes, apply iso offsets.
 - Boolean SDF operation (difference/union/intersection).
 - Optional iso-curve extraction per slice (matplotlib contour).
@@ -53,11 +53,11 @@ flowchart TB
   end
   subgraph s1["Processing Engine"]
     B --> D{"Generate Bracing?"}
-    D -- Yes --> E["For each slice..."]
-    E --> E1["core.get_profile_mask"]
-    E1 --> E2["core.generate_centroids (KMeans)"]
-    E2 --> E3["core.constrain_centroids_to_mask"]
-    E3 --> E4["core.compute_voronoi_sdf"]
+    D -- Yes --> E["Generate 3D Trajectories"]
+    E --> E1["core.build_centroid_tracks"]
+    E1 --> E2["For each slice..."]
+    E2 --> E3["Compute Weights (Ramp)"]
+    E3 --> E4["core.compute_weighted_voronoi_ridge"]
     E4 --> F["Bracing Fields Stack"]
     D -- No --> F
     F --> G["core.compute_sf_operation"]

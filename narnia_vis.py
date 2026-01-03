@@ -76,9 +76,23 @@ class NarniaCurveViewer:
         self._chk_generate_bracing.checked = True
         self._chk_generate_bracing.set_on_checked(self._on_generate_toggled)
 
-        # Num Centroids Slider (Limit 1-6)
-        row_k, self._num_centroids_slider, self._num_centroids_edit = vwg.create_slider_row(
-            "Num Centroids", 1, 6, 5, None, is_int=True
+        # Start K Slider
+        row_k_start, self._k_start_slider, self._k_start_edit = vwg.create_slider_row(
+            "Start K", 1, 12, 3, None, is_int=True
+        )
+        # End K Slider
+        row_k_end, self._k_end_slider, self._k_end_edit = vwg.create_slider_row(
+            "End K", 1, 12, 8, None, is_int=True
+        )
+
+        # Ramp Slider
+        row_ramp, self._ramp_slider, self._ramp_edit = vwg.create_slider_row(
+            "Ramp", 1, 20, 5, None, is_int=True
+        )
+
+        # Smooth Sigma Slider
+        row_smooth, self._smooth_slider, self._smooth_edit = vwg.create_slider_row(
+            "Smooth Sigma", 0.1, 5.0, 2.0, None
         )
 
         self._btn_compute = gui.Button("Load / Re-generate Bracing")
@@ -109,7 +123,10 @@ class NarniaCurveViewer:
         self._compute_panel.add_child(row_brac)
         self._compute_panel.add_fixed(10)
         self._compute_panel.add_child(self._chk_generate_bracing)
-        self._compute_panel.add_child(row_k)
+        self._compute_panel.add_child(row_k_start)
+        self._compute_panel.add_child(row_k_end)
+        self._compute_panel.add_child(row_ramp)
+        self._compute_panel.add_child(row_smooth)
         self._compute_panel.add_fixed(10)
         self._compute_panel.add_child(self._btn_compute)
         self._compute_panel.add_fixed(16)
@@ -578,24 +595,22 @@ class NarniaCurveViewer:
             self._status.text = "Generating bracing..."
             self._window.set_needs_layout()
             
-            k = int(self._num_centroids_slider.int_value)
-            print(f"Generating bracing from centroids (k={k})...")
-            self._c_bracing = np.zeros_like(self._c_profile)
-            prev_centroids = None
+            k_start = int(self._k_start_slider.int_value)
+            k_end = int(self._k_end_slider.int_value)
+            ramp_val = int(self._ramp_slider.int_value)
+            smooth_val = float(self._smooth_slider.double_value)
             
-            for i in range(num_fields):
-                slice_2d = self._c_profile[i].reshape((ny, nx))
-                mask = core.get_profile_mask(slice_2d, iso_level=self._c_iso_p_base or 0.0)
-                
-                centroids = core.generate_centroids(mask, k=k, prev_centroids=prev_centroids)
-                centroids = core.constrain_centroids_to_mask(centroids, mask)
-                
-                voronoi_sdf_flat = core.compute_voronoi_sdf((ny, nx), centroids)
-                self._c_bracing[i] = voronoi_sdf_flat.ravel()
-                prev_centroids = centroids
-                
-                if i % 10 == 0:
-                    print(f"Generated bracing for slice {i}/{num_fields}")
+            print(f"Generating bracing (Centroids: {k_start} -> {k_end}, Ramp: {ramp_val}, Smooth: {smooth_val})...")
+            
+            # Use the new interpolated pipeline
+            self._c_bracing, _, _ = core.generate_interpolated_bracing_fields(
+                self._c_profile, 
+                k_min=k_start, 
+                k_max=k_end,
+                iso_level=self._c_iso_p_base or 0.0,
+                ramp=ramp_val,
+                smooth_sigma=smooth_val
+            )
             
             self._c_iso_b_base = 0.0
         else:
