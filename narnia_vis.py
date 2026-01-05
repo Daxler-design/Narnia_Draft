@@ -72,14 +72,50 @@ class NarniaCurveViewer:
         )
         self._bracing_path.enabled = False
 
-        self._chk_generate_bracing = gui.Checkbox("Generate Bracing from Centroids")
+        self._chk_generate_bracing = gui.Checkbox("Generate Bracing")
         self._chk_generate_bracing.checked = True
         self._chk_generate_bracing.set_on_checked(self._on_generate_toggled)
 
-        # Num Centroids Slider (Limit 1-6)
+        # --- Bracing Generation Options ---
+        self._gen_options_container = gui.Vert(0, gui.Margins(0, 0, 0, 0))
+        
+        self._gen_options_container.add_child(gui.Label("Generation Method"))
+        self._gen_method_combo = gui.Combobox()
+        self._gen_method_combo.add_item("static-bracing")
+        self._gen_method_combo.add_item("keyBlending-bracing")
+        self._gen_method_combo.set_on_selection_changed(self._on_gen_method_changed)
+        self._gen_options_container.add_child(self._gen_method_combo)
+        self._gen_options_container.add_fixed(5)
+
+        # 1. Static Params (Num Centroids)
+        self._static_params = gui.Vert(0, gui.Margins(0, 0, 0, 0))
         row_k, self._num_centroids_slider, self._num_centroids_edit = vwg.create_slider_row(
             "Num Centroids", 1, 6, 5, None, is_int=True
         )
+        self._static_params.add_child(row_k)
+        
+        # 2. KeyBlending Params
+        self._keyblending_params = gui.Vert(0, gui.Margins(0, 0, 0, 0))
+        
+        # Key Step
+        row_ks, self._kb_step_slider, self._kb_step_edit = vwg.create_slider_row(
+            "Key Step", 1, 50, 5, None, is_int=True
+        )
+        self._keyblending_params.add_child(row_ks)
+
+        # Smooth (Blend Factor)
+        row_kb, self._kb_slider, self._kb_edit = vwg.create_slider_row(
+            "Smooth Factor", 0.0, 1.0, 0.0, None
+        )
+        self._keyblending_params.add_child(row_kb)
+
+        # Initial visibility
+        self._static_params.visible = True
+        self._keyblending_params.visible = False
+        
+        self._gen_options_container.add_child(self._static_params)
+        self._gen_options_container.add_child(self._keyblending_params)
+        # ----------------------------------
 
         self._btn_compute = gui.Button("Load / Re-generate Bracing")
 
@@ -109,7 +145,7 @@ class NarniaCurveViewer:
         self._compute_panel.add_child(row_brac)
         self._compute_panel.add_fixed(10)
         self._compute_panel.add_child(self._chk_generate_bracing)
-        self._compute_panel.add_child(row_k)
+        self._compute_panel.add_child(self._gen_options_container)
         self._compute_panel.add_fixed(10)
         self._compute_panel.add_child(self._btn_compute)
         self._compute_panel.add_fixed(16)
@@ -234,6 +270,12 @@ class NarniaCurveViewer:
         self._overlay_geom: Optional[o3d.geometry.Geometry] = None
         self._current_bbox: Optional[o3d.geometry.AxisAlignedBoundingBox] = None
 
+    def _on_gen_method_changed(self, name, index):
+        is_static = (index == 0)
+        self._static_params.visible = is_static
+        self._keyblending_params.visible = not is_static
+        self._window.set_needs_layout()
+
     def _on_view_channel_changed(self, name, index):
         self._update_scene(fit_camera=False)
         self._update_slider_ranges()
@@ -272,6 +314,8 @@ class NarniaCurveViewer:
 
     def _on_generate_toggled(self, checked):
         self._bracing_path.enabled = not checked
+        self._gen_options_container.visible = checked
+        self._window.set_needs_layout()
 
     def _on_boolean_param_changed(self, *args):
         if self.compute_state.profile is None or self.compute_state.bracing is None:
@@ -572,22 +616,25 @@ class NarniaCurveViewer:
             
             k = int(self._num_centroids_slider.int_value)
             print(f"Generating bracing from centroids (k={k})...")
-            self.compute_state.bracing = np.zeros_like(self.compute_state.profile)
-            prev_centroids = None
             
-            for i in range(num_fields):
-                slice_2d = self.compute_state.profile[i].reshape((ny, nx))
-                mask = core.get_profile_mask(slice_2d, iso_level=self.compute_state.iso_p_base or 0.0)
-                
-                centroids = core.generate_centroids(mask, k=k, prev_centroids=prev_centroids)
-                centroids = core.constrain_centroids_to_mask(centroids, mask)
-                
-                voronoi_sdf_flat = core.compute_voronoi_sdf((ny, nx), centroids)
-                self.compute_state.bracing[i] = voronoi_sdf_flat.ravel()
-                prev_centroids = centroids
-                
-                if i % 10 == 0:
-                    print(f"Generated bracing for slice {i}/{num_fields}")
+            method_idx = self._gen_method_combo.selected_index
+            if method_idx == 1: # keyBlending-bracing
+                smooth_val = self._kb_slider.double_value
+                step_val = int(self._kb_step_slider.int_value)
+                print(f"KeyBlending: step={step_val}, smooth={smooth_val}")
+                self.compute_state.bracing = core.generate_bracing_key_blending(
+                    self.compute_state.profile,
+                    self.compute_state.iso_p_base or 0.0,
+                    nx, ny, k,
+                    key_step=step_val,
+                    smooth=smooth_val
+                )
+            else: # static-bracing
+                self.compute_state.bracing = core.generate_bracing_static(
+                    self.compute_state.profile,
+                    self.compute_state.iso_p_base or 0.0,
+                    nx, ny, k
+                )
             
             self.compute_state.iso_b_base = 0.0
         else:
