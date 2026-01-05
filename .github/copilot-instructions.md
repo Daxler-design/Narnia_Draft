@@ -40,3 +40,19 @@
 - Explain how to run the app locally (`python main.py`) and what to manually verify in the UI.
 - If you change `core.py`, suggest a small deterministic test case for the function(s).
 - If you change file paths or exports, confirm backward compatibility with existing `.npz` files.
+
+## Scope & non-goals
+- Preserve behavior/UI flow unless explicitly requested.
+- No drive-by refactors: no renaming sprees, no formatting-only diffs, no “cleanup” unrelated to the task.
+- Keep to the existing 3-file structure; do not add new modules/files unless asked.
+
+## Stepwise change protocol
+- Always start with a short patch plan (bullets) before editing code.
+- Implement the smallest change for that step (prefer extraction/moves over rewrites).
+- End by listing: what changed + what intentionally did NOT change.
+
+## Minimal smoke tests (must pass)
+1) `python main.py` launches the window.
+2) Compute tab: load/generate + slice/iso updates without crash.
+3) Export `.npz` succeeds and preserves existing keys.
+4) NPZ tab: load exported file + switch view + slice/iso updates without crash.
