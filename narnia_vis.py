@@ -224,24 +224,9 @@ class NarniaCurveViewer:
         # Sync axis inset as the user navigates the main viewport.
         self._scene_widget.set_on_mouse(self._on_mouse)
 
-        # --- State: Compute Tab ---
-        self._c_profile: Optional[np.ndarray] = None
-        self._c_bracing: Optional[np.ndarray] = None
-        self._c_result: Optional[np.ndarray] = None
-        self._c_iso_p_base = 0.0
-        self._c_iso_b_base = 0.0
-        self._c_bounds_min = None
-        self._c_bounds_max = None
-        self._c_grid = (None, None, None, None) # nx, ny, X, Y
-
-        # --- State: NPZ Tab ---
-        self._n_result: Optional[np.ndarray] = None
-        self._n_profile: Optional[np.ndarray] = None
-        self._n_bracing: Optional[np.ndarray] = None
-        self._n_bounds_min = None
-        self._n_bounds_max = None
-        self._n_grid = (None, None, None, None) # nx, ny, X, Y
-        self._n_iso_base = 0.0
+        # --- State ---
+        self.compute_state = vut.ViewState()
+        self.viewer_state = vut.ViewState()
 
         self._curves_geom: Optional[o3d.geometry.LineSet] = None
         self._profile_geom: Optional[o3d.geometry.LineSet] = None
@@ -260,7 +245,9 @@ class NarniaCurveViewer:
 
     def _update_slider_ranges(self):
         idx_tab = self._tabs.selected_tab_index
-        res = self._c_result if idx_tab == 0 else self._n_result
+        state = self.compute_state if idx_tab == 0 else self.viewer_state
+        res = state.result
+        
         slider = self._c_iso_slider if idx_tab == 0 else self._n_iso_slider
         edit = self._c_iso_edit if idx_tab == 0 else self._n_iso_edit
         
@@ -287,7 +274,7 @@ class NarniaCurveViewer:
         self._bracing_path.enabled = not checked
 
     def _on_boolean_param_changed(self, *args):
-        if self._c_profile is None or self._c_bracing is None:
+        if self.compute_state.profile is None or self.compute_state.bracing is None:
             return
         # If user is tweaking compute params, ensure we are on the compute tab
         if self._tabs.selected_tab_index != 0:
@@ -301,11 +288,11 @@ class NarniaCurveViewer:
         off_p = self._profile_offset_slider.double_value
         off_b = self._bracing_offset_slider.double_value
 
-        self._c_result = core.compute_sf_operation(
-            self._c_profile,
-            self._c_bracing,
-            iso_level_A=self._c_iso_p_base + off_p,
-            iso_level_B=self._c_iso_b_base + off_b,
+        self.compute_state.result = core.compute_sf_operation(
+            self.compute_state.profile,
+            self.compute_state.bracing,
+            iso_level_A=self.compute_state.iso_p_base + off_p,
+            iso_level_B=self.compute_state.iso_b_base + off_b,
             mode=mode,
         )
 
@@ -366,8 +353,9 @@ class NarniaCurveViewer:
 
     def _on_fit(self):
         idx_tab = self._tabs.selected_tab_index
-        bmin = self._c_bounds_min if idx_tab == 0 else self._n_bounds_min
-        bmax = self._c_bounds_max if idx_tab == 0 else self._n_bounds_max
+        state = self.compute_state if idx_tab == 0 else self.viewer_state
+        bmin = state.bounds_min
+        bmax = state.bounds_max
         
         if bmin is None or bmax is None:
             self._status.text = "No data loaded to fit camera."
@@ -455,8 +443,8 @@ class NarniaCurveViewer:
                 brac_fields = None
 
             # Try to get bounds from NPZ, fallback to current if available
-            current_bmin = self._n_bounds_min if self._n_bounds_min is not None else self._c_bounds_min
-            current_bmax = self._n_bounds_max if self._n_bounds_max is not None else self._c_bounds_max
+            current_bmin = self.viewer_state.bounds_min if self.viewer_state.bounds_min is not None else self.compute_state.bounds_min
+            current_bmax = self.viewer_state.bounds_max if self.viewer_state.bounds_max is not None else self.compute_state.bounds_max
             
             bmin = data.get("bounds_min", current_bmin)
             bmax = data.get("bounds_max", current_bmax)
@@ -465,26 +453,26 @@ class NarniaCurveViewer:
                 bmin = np.array([0.0, 0.0, 0.0])
                 bmax = np.array([100.0, 100.0, 100.0])
 
-            self._n_result = res_fields
-            self._n_profile = prof_fields
-            self._n_bracing = brac_fields
+            self.viewer_state.result = res_fields
+            self.viewer_state.profile = prof_fields
+            self.viewer_state.bracing = brac_fields
             
-            self._n_bounds_min = bmin
-            self._n_bounds_max = bmax
-            self._n_iso_base = iso
+            self.viewer_state.bounds_min = bmin
+            self.viewer_state.bounds_max = bmax
+            self.viewer_state.iso_p_base = iso
             
             num_fields, nx, ny = core.infer_grid_from_scalar_fields(res_fields)
             x = np.linspace(bmin[0], bmax[0], nx)
             y = np.linspace(bmin[1], bmax[1], ny)
             X, Y = np.meshgrid(x, y, indexing="xy")
-            self._n_grid = (nx, ny, X, Y)
+            self.viewer_state.grid = (nx, ny, X, Y)
 
             # Update View Selector
             self._n_view_selector.clear_items()
             self._n_view_selector.add_item("Result")
-            if self._n_profile is not None:
+            if self.viewer_state.profile is not None:
                 self._n_view_selector.add_item("Profile")
-            if self._n_bracing is not None:
+            if self.viewer_state.bracing is not None:
                 self._n_view_selector.add_item("Bracing")
             self._n_view_selector.selected_index = 0
 
@@ -499,9 +487,10 @@ class NarniaCurveViewer:
 
     def _on_export(self):
         idx_tab = self._tabs.selected_tab_index
-        res = self._c_result if idx_tab == 0 else self._n_result
-        bmin = self._c_bounds_min if idx_tab == 0 else self._n_bounds_min
-        bmax = self._c_bounds_max if idx_tab == 0 else self._n_bounds_max
+        state = self.compute_state if idx_tab == 0 else self.viewer_state
+        res = state.result
+        bmin = state.bounds_min
+        bmax = state.bounds_max
         slider = self._c_iso_slider if idx_tab == 0 else self._n_iso_slider
 
         if res is None:
@@ -527,12 +516,12 @@ class NarniaCurveViewer:
             
             # Add optional fields if requested
             if self._chk_export_profile.checked:
-                prof = self._c_profile if idx_tab == 0 else self._n_profile
+                prof = state.profile
                 if prof is not None:
                     save_dict["profile_fields"] = prof
             
             if self._chk_export_bracing.checked:
-                brac = self._c_bracing if idx_tab == 0 else self._n_bracing
+                brac = state.bracing
                 if brac is not None:
                     save_dict["bracing_fields"] = brac
 
@@ -544,15 +533,15 @@ class NarniaCurveViewer:
 
     def _on_slice_changed(self, _):
         idx_tab = self._tabs.selected_tab_index
-        res = self._c_result if idx_tab == 0 else self._n_result
-        if res is None:
+        state = self.compute_state if idx_tab == 0 else self.viewer_state
+        if state.result is None:
             return
         self._update_scene(fit_camera=False)
 
     def _on_iso_changed(self, _):
         idx_tab = self._tabs.selected_tab_index
-        res = self._c_result if idx_tab == 0 else self._n_result
-        if res is None:
+        state = self.compute_state if idx_tab == 0 else self.viewer_state
+        if state.result is None:
             return
         self._update_scene(fit_camera=False)
 
@@ -567,12 +556,13 @@ class NarniaCurveViewer:
         with open(pp, "r") as f:
             data_profile = json.load(f)
 
-        self._c_iso_p_base, _, bmax_p, bmin_p = core.meta_data_info(data_profile)
-        self._c_profile, _ = core.stack_scalar_fields(data_profile)
+        iso_p, _, bmax_p, bmin_p = core.meta_data_info(data_profile)
+        self.compute_state.iso_p_base = iso_p
+        self.compute_state.profile, _ = core.stack_scalar_fields(data_profile)
         
-        self._c_bounds_min = bmin_p
-        self._c_bounds_max = bmax_p
-        num_fields, nx, ny = core.infer_grid_from_scalar_fields(self._c_profile)
+        self.compute_state.bounds_min = bmin_p
+        self.compute_state.bounds_max = bmax_p
+        num_fields, nx, ny = core.infer_grid_from_scalar_fields(self.compute_state.profile)
 
         if self._chk_generate_bracing.checked:
             self._status.text = "Generating bracing..."
@@ -580,24 +570,24 @@ class NarniaCurveViewer:
             
             k = int(self._num_centroids_slider.int_value)
             print(f"Generating bracing from centroids (k={k})...")
-            self._c_bracing = np.zeros_like(self._c_profile)
+            self.compute_state.bracing = np.zeros_like(self.compute_state.profile)
             prev_centroids = None
             
             for i in range(num_fields):
-                slice_2d = self._c_profile[i].reshape((ny, nx))
-                mask = core.get_profile_mask(slice_2d, iso_level=self._c_iso_p_base or 0.0)
+                slice_2d = self.compute_state.profile[i].reshape((ny, nx))
+                mask = core.get_profile_mask(slice_2d, iso_level=self.compute_state.iso_p_base or 0.0)
                 
                 centroids = core.generate_centroids(mask, k=k, prev_centroids=prev_centroids)
                 centroids = core.constrain_centroids_to_mask(centroids, mask)
                 
                 voronoi_sdf_flat = core.compute_voronoi_sdf((ny, nx), centroids)
-                self._c_bracing[i] = voronoi_sdf_flat.ravel()
+                self.compute_state.bracing[i] = voronoi_sdf_flat.ravel()
                 prev_centroids = centroids
                 
                 if i % 10 == 0:
                     print(f"Generated bracing for slice {i}/{num_fields}")
             
-            self._c_iso_b_base = 0.0
+            self.compute_state.iso_b_base = 0.0
         else:
             self._status.text = "Loading bracing data..."
             self._window.set_needs_layout()
@@ -607,10 +597,11 @@ class NarniaCurveViewer:
                 raise FileNotFoundError(f"Bracing JSON not found: {bp}")
             with open(bp, "r") as f:
                 data_bracing = json.load(f)
-            self._c_iso_b_base, _, _, _ = core.meta_data_info(data_bracing)
-            self._c_bracing, _ = core.stack_scalar_fields(data_bracing)
+            iso_b, _, _, _ = core.meta_data_info(data_bracing)
+            self.compute_state.iso_b_base = iso_b
+            self.compute_state.bracing, _ = core.stack_scalar_fields(data_bracing)
 
-        if self._c_bracing.shape != self._c_profile.shape:
+        if self.compute_state.bracing.shape != self.compute_state.profile.shape:
             raise ValueError("Bracing/Profile scalar field arrays must have the same shape")
 
         self._status.text = "Computing boolean operation..."
@@ -618,10 +609,10 @@ class NarniaCurveViewer:
         
         self._update_boolean_result()
 
-        x = np.linspace(self._c_bounds_min[0], self._c_bounds_max[0], nx)
-        y = np.linspace(self._c_bounds_min[1], self._c_bounds_max[1], ny)
+        x = np.linspace(self.compute_state.bounds_min[0], self.compute_state.bounds_max[0], nx)
+        y = np.linspace(self.compute_state.bounds_min[1], self.compute_state.bounds_max[1], ny)
         X, Y = np.meshgrid(x, y, indexing="xy")
-        self._c_grid = (nx, ny, X, Y)
+        self.compute_state.grid = (nx, ny, X, Y)
 
         self._update_slider_ranges()
         self._c_iso_slider.double_value = 0.0
@@ -629,26 +620,26 @@ class NarniaCurveViewer:
 
     def set_data(self, result_fields_2d: np.ndarray, bounds_min, bounds_max, iso_level: float = 0.0, profile_fields: Optional[np.ndarray] = None, iso_p: float = 0.0):
         # Note: set_data is used when launching from main.py with pre-computed result.
-        self._c_result = np.asarray(result_fields_2d)
-        self._c_profile = profile_fields
-        self._c_bracing = None
+        self.compute_state.result = np.asarray(result_fields_2d)
+        self.compute_state.profile = profile_fields
+        self.compute_state.bracing = None
         
-        self._c_iso_p_base = iso_p
-        self._c_iso_b_base = 0.0
+        self.compute_state.iso_p_base = iso_p
+        self.compute_state.iso_b_base = 0.0
         
-        self._c_bounds_min = bounds_min
-        self._c_bounds_max = bounds_max
+        self.compute_state.bounds_min = bounds_min
+        self.compute_state.bounds_max = bounds_max
 
         try:
-            num_fields, nx, ny = core.infer_grid_from_scalar_fields(self._c_result)
+            num_fields, nx, ny = core.infer_grid_from_scalar_fields(self.compute_state.result)
         except ValueError as e:
             self._status.text = f"Load error: {e}"
             return
 
-        x = np.linspace(self._c_bounds_min[0], self._c_bounds_max[0], nx)
-        y = np.linspace(self._c_bounds_min[1], self._c_bounds_max[1], ny)
+        x = np.linspace(self.compute_state.bounds_min[0], self.compute_state.bounds_max[0], nx)
+        y = np.linspace(self.compute_state.bounds_min[1], self.compute_state.bounds_max[1], ny)
         X, Y = np.meshgrid(x, y, indexing="xy")
-        self._c_grid = (nx, ny, X, Y)
+        self.compute_state.grid = (nx, ny, X, Y)
 
         self._tabs.selected_tab_index = 0
         self._update_slider_ranges()
@@ -671,35 +662,37 @@ class NarniaCurveViewer:
         curve_color = [1.0, 1.0, 1.0, 1.0]
 
         if idx_tab == 0: # Compute
-            res = self._c_result
-            prof = self._c_profile
+            state = self.compute_state
+            res = state.result
+            prof = state.profile
             # brac remains None for Compute tab to preserve existing behavior
             
-            bmin, bmax = self._c_bounds_min, self._c_bounds_max
-            nx, ny, X, Y = self._c_grid
-            iso_p_base = self._c_iso_p_base
-            iso_b_base = self._c_iso_b_base
+            bmin, bmax = state.bounds_min, state.bounds_max
+            nx, ny, X, Y = state.grid
+            iso_p_base = state.iso_p_base
+            iso_b_base = state.iso_b_base
             iso = float(self._c_iso_slider.double_value)
             curve_color = [0.1, 0.7, 0.95, 1.0]  # Cyan-ish
         else: # NPZ
+            state = self.viewer_state
             # Determine which field to show based on selector
             sel_idx = self._n_view_selector.selected_index
             sel_text = self._n_view_selector.get_item(sel_idx) if sel_idx >= 0 else "Result"
             
-            bmin, bmax = self._n_bounds_min, self._n_bounds_max
-            nx, ny, X, Y = self._n_grid
+            bmin, bmax = state.bounds_min, state.bounds_max
+            nx, ny, X, Y = state.grid
             iso = float(self._n_iso_slider.double_value)
             
             if sel_text == "Profile":
-                res = self._n_profile
+                res = state.profile
                 curve_color = [0.8, 0.8, 0.8, 1.0] # Gray
             elif sel_text == "Bracing":
-                res = self._n_bracing
+                res = state.bracing
                 curve_color = [0.2, 0.8, 0.2, 1.0] # Green
             else: # Result
-                res = self._n_result
-                prof = self._n_profile
-                brac = self._n_bracing
+                res = state.result
+                prof = state.profile
+                brac = state.bracing
                 curve_color = [1.0, 0.5, 0.0, 1.0]  # Orange-ish
 
         if res is None or nx is None or ny is None:
@@ -789,8 +782,9 @@ class NarniaCurveViewer:
         bbox = self._current_bbox
         if bbox is None:
             idx_tab = self._tabs.selected_tab_index
-            bmin = self._c_bounds_min if idx_tab == 0 else self._n_bounds_min
-            bmax = self._c_bounds_max if idx_tab == 0 else self._n_bounds_max
+            state = self.compute_state if idx_tab == 0 else self.viewer_state
+            bmin = state.bounds_min
+            bmax = state.bounds_max
             
             if bmin is None or bmax is None:
                 return
@@ -839,22 +833,3 @@ def run_app_from_data(
     app.run()
 
 
-# if __name__ == "__main__":
-#     # If an output NPZ exists, use it; otherwise allow the user to compute from JSON in the UI.
-#     output_path = Path("./output/processed_sdf_results.npz")
-#     profile_json_path = Path("./alice_result/251120/ext/waveStackFields.json")
-
-#     if output_path.exists() and profile_json_path.exists():
-#         data = np.load(output_path, allow_pickle=True)
-#         result_fields = data["result_fields"]
-#         iso_level = float(data["iso_level"])
-#         with open(profile_json_path, "r") as f:
-#             meta = json.load(f)
-#         iso_p, _, bounds_max, bounds_min = core.meta_data_info(meta)
-        
-#         # Try to load profile fields for preview if they exist in the same folder as the JSON
-#         profile_fields, _ = core.stack_scalar_fields(meta)
-        
-#         run_app_from_data(result_fields, bounds_min, bounds_max, iso_level=iso_level, profile_fields=profile_fields, iso_p=iso_p)
-#     else:
-#         run_app()
