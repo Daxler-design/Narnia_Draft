@@ -363,49 +363,51 @@ class NarniaCurveViewer:
         self._fit_camera_to_current()
 
     def _on_select_output(self):
-        dlg = gui.FileDialog(gui.FileDialog.OPEN_DIR, "Select Output Folder", self._window.theme)
-        dlg.set_on_cancel(self._on_file_dialog_cancel)
-        dlg.set_on_done(self._on_output_dir_done)
-        self._window.show_dialog(dlg)
+        vwg.show_file_dialog(
+            self._window, 
+            "Select Output Folder", 
+            self._on_output_dir_done, 
+            mode=gui.FileDialog.OPEN_DIR
+        )
 
     def _on_output_dir_done(self, path):
         self._output_dir.text_value = path
-        self._window.close_dialog()
 
     def _on_select_profile(self):
-        dlg = gui.FileDialog(gui.FileDialog.OPEN, "Select Profile JSON", self._window.theme)
-        dlg.add_filter(".json", "JSON files (.json)")
-        dlg.set_on_cancel(self._on_file_dialog_cancel)
-        dlg.set_on_done(self._on_profile_done)
-        self._window.show_dialog(dlg)
+        vwg.show_file_dialog(
+            self._window,
+            "Select Profile JSON",
+            self._on_profile_done,
+            filters=[(".json", "JSON files (.json)")]
+        )
 
     def _on_profile_done(self, path):
         self._profile_path.text_value = path
-        self._window.close_dialog()
 
     def _on_select_bracing(self):
-        dlg = gui.FileDialog(gui.FileDialog.OPEN, "Select Bracing JSON", self._window.theme)
-        dlg.add_filter(".json", "JSON files (.json)")
-        dlg.set_on_cancel(self._on_file_dialog_cancel)
-        dlg.set_on_done(self._on_bracing_done)
-        self._window.show_dialog(dlg)
+        vwg.show_file_dialog(
+            self._window,
+            "Select Bracing JSON",
+            self._on_bracing_done,
+            filters=[(".json", "JSON files (.json)")]
+        )
 
     def _on_bracing_done(self, path):
         self._bracing_path.text_value = path
-        self._window.close_dialog()
 
     def _on_select_npz(self):
-        dlg = gui.FileDialog(gui.FileDialog.OPEN, "Select NPZ File", self._window.theme)
-        dlg.add_filter(".npz", "NPZ files (.npz)")
-        dlg.set_on_cancel(self._on_file_dialog_cancel)
-        dlg.set_on_done(self._on_npz_file_done)
-        self._window.show_dialog(dlg)
+        vwg.show_file_dialog(
+            self._window,
+            "Select NPZ File",
+            self._on_npz_file_done,
+            filters=[(".npz", "NPZ files (.npz)")]
+        )
 
     def _on_npz_file_done(self, path):
         self._npz_path.text_value = path
-        self._window.close_dialog()
 
     def _on_file_dialog_cancel(self):
+        # Deprecated, handled by vwg.show_file_dialog
         self._window.close_dialog()
 
     def _on_file_dialog_done(self, path):
@@ -647,59 +649,120 @@ class NarniaCurveViewer:
         self._status.text = "Data loaded. Use slice/iso controls."
         self._update_scene(fit_camera=True)
 
-    def _update_scene(self, fit_camera: bool):
+    def _collect_scene_inputs(self):
         idx_tab = self._tabs.selected_tab_index
-        
-        # Initialize variables
-        res = None
-        prof = None
-        brac = None
-        bmin, bmax = None, None
-        nx, ny, X, Y = None, None, None, None
-        iso = 0.0
-        iso_p_base = 0.0
-        iso_b_base = 0.0
-        curve_color = [1.0, 1.0, 1.0, 1.0]
+        inputs = {
+            "res": None, "prof": None, "brac": None,
+            "bmin": None, "bmax": None,
+            "nx": None, "ny": None, "X": None, "Y": None,
+            "iso": 0.0, "iso_p": 0.0, "iso_b": 0.0,
+            "curve_color": [1.0, 1.0, 1.0, 1.0],
+            "slice_idx": int(self._slice_slider.int_value)
+        }
 
         if idx_tab == 0: # Compute
             state = self.compute_state
-            res = state.result
-            prof = state.profile
-            # brac remains None for Compute tab to preserve existing behavior
+            inputs["res"] = state.result
+            inputs["prof"] = state.profile
+            # brac remains None for Compute tab
             
-            bmin, bmax = state.bounds_min, state.bounds_max
-            nx, ny, X, Y = state.grid
+            inputs["bmin"], inputs["bmax"] = state.bounds_min, state.bounds_max
+            inputs["nx"], inputs["ny"], inputs["X"], inputs["Y"] = state.grid
+            
             iso_p_base = state.iso_p_base
             iso_b_base = state.iso_b_base
-            iso = float(self._c_iso_slider.double_value)
-            curve_color = [0.1, 0.7, 0.95, 1.0]  # Cyan-ish
+            inputs["iso"] = float(self._c_iso_slider.double_value)
+            inputs["curve_color"] = [0.1, 0.7, 0.95, 1.0]
+            
+            # Offsets
+            off_p = self._profile_offset_slider.double_value
+            off_b = self._bracing_offset_slider.double_value
+            inputs["iso_p"] = iso_p_base + off_p
+            inputs["iso_b"] = iso_b_base + off_b
+            
         else: # NPZ
             state = self.viewer_state
-            # Determine which field to show based on selector
             sel_idx = self._n_view_selector.selected_index
             sel_text = self._n_view_selector.get_item(sel_idx) if sel_idx >= 0 else "Result"
             
-            bmin, bmax = state.bounds_min, state.bounds_max
-            nx, ny, X, Y = state.grid
-            iso = float(self._n_iso_slider.double_value)
+            inputs["bmin"], inputs["bmax"] = state.bounds_min, state.bounds_max
+            inputs["nx"], inputs["ny"], inputs["X"], inputs["Y"] = state.grid
+            inputs["iso"] = float(self._n_iso_slider.double_value)
             
             if sel_text == "Profile":
-                res = state.profile
-                curve_color = [0.8, 0.8, 0.8, 1.0] # Gray
+                inputs["res"] = state.profile
+                inputs["curve_color"] = [0.8, 0.8, 0.8, 1.0]
             elif sel_text == "Bracing":
-                res = state.bracing
-                curve_color = [0.2, 0.8, 0.2, 1.0] # Green
+                inputs["res"] = state.bracing
+                inputs["curve_color"] = [0.2, 0.8, 0.2, 1.0]
             else: # Result
-                res = state.result
-                prof = state.profile
-                brac = state.bracing
-                curve_color = [1.0, 0.5, 0.0, 1.0]  # Orange-ish
+                inputs["res"] = state.result
+                inputs["prof"] = state.profile
+                inputs["brac"] = state.bracing
+                inputs["curve_color"] = [1.0, 0.5, 0.0, 1.0]
+            
+            # No offsets in NPZ viewer
+            inputs["iso_p"] = state.iso_p_base
+            inputs["iso_b"] = state.iso_b_base
 
-        if res is None or nx is None or ny is None:
+        return inputs
+
+    def _build_geometries(self, inputs):
+        res = inputs["res"]
+        if res is None or inputs["nx"] is None:
+            return None
+
+        idx = inputs["slice_idx"]
+        ny, nx = inputs["ny"], inputs["nx"]
+        X, Y = inputs["X"], inputs["Y"]
+        z = vut.slice_z(idx, res.shape[0], inputs["bmin"], inputs["bmax"])
+        
+        geoms = {
+            "curves": None, "profile": None, "bracing": None,
+            "curve_count": 0
+        }
+
+        # 1. Main Curves
+        slice_2d = res[idx].reshape((ny, nx))
+        curves = core.iso_curves_for_slice_2d(slice_2d, inputs["iso"], X, Y)
+        geoms["curve_count"] = len(curves)
+        ls = vut.curves_to_lineset(curves, z)
+        if ls is not None:
+            mat = rendering.MaterialRecord()
+            mat.shader = "unlitLine"
+            mat.line_width = 2.0
+            mat.base_color = inputs["curve_color"]
+            geoms["curves"] = (ls, mat)
+
+        # 2. Profile Curves
+        if inputs["prof"] is not None:
+            p_slice_2d = inputs["prof"][idx].reshape((ny, nx))
+            p_curves = core.iso_curves_for_slice_2d(p_slice_2d, inputs["iso_p"], X, Y)
+            p_ls = vut.curves_to_lineset(p_curves, z)
+            if p_ls is not None:
+                p_mat = rendering.MaterialRecord()
+                p_mat.shader = "unlitLine"
+                p_mat.line_width = 1.0
+                p_mat.base_color = [0.8, 0.8, 0.8, 0.6]
+                geoms["profile"] = (p_ls, p_mat)
+
+        # 3. Bracing Curves
+        if inputs["brac"] is not None:
+            b_slice_2d = inputs["brac"][idx].reshape((ny, nx))
+            b_curves = core.iso_curves_for_slice_2d(b_slice_2d, inputs["iso_b"], X, Y)
+            b_ls = vut.curves_to_lineset(b_curves, z)
+            if b_ls is not None:
+                b_mat = rendering.MaterialRecord()
+                b_mat.shader = "unlitLine"
+                b_mat.line_width = 1.0
+                b_mat.base_color = [0.2, 0.8, 0.2, 0.6]
+                geoms["bracing"] = (b_ls, b_mat)
+                
+        return geoms
+
+    def _apply_geometries(self, geoms, inputs, fit_camera):
+        if geoms is None:
             return
-
-        idx = int(self._slice_slider.int_value)
-        z = vut.slice_z(idx, res.shape[0], bmin, bmax)
 
         # Remove old geometries
         for name in ["curves", "profile", "bracing", "overlay"]:
@@ -714,57 +777,28 @@ class NarniaCurveViewer:
         self._overlay_geom = None
         self._current_bbox = None
 
-        # 1. Extract and show Main Curves
-        slice_2d = res[idx].reshape((ny, nx))
-        curves = core.iso_curves_for_slice_2d(slice_2d, iso, X, Y)
-        ls = vut.curves_to_lineset(curves, z)
-        if ls is not None:
-            self._curves_geom = ls
-            mat = rendering.MaterialRecord()
-            mat.shader = "unlitLine"
-            mat.line_width = 2.0
-            mat.base_color = curve_color
-            self._scene_widget.scene.add_geometry("curves", ls, mat)
+        # Add new geometries
+        if geoms["curves"]:
+            self._curves_geom = geoms["curves"][0]
+            self._scene_widget.scene.add_geometry("curves", *geoms["curves"])
+            
+        if geoms["profile"]:
+            self._profile_geom = geoms["profile"][0]
+            self._scene_widget.scene.add_geometry("profile", *geoms["profile"])
+            
+        if geoms["bracing"]:
+            self._bracing_geom = geoms["bracing"][0]
+            self._scene_widget.scene.add_geometry("bracing", *geoms["bracing"])
 
-        # 2. Extract and show Profile Curves (Reference)
-        if prof is not None:
-            off_p = self._profile_offset_slider.double_value if idx_tab == 0 else 0.0
-            p_slice_2d = prof[idx].reshape((ny, nx))
-            p_curves = core.iso_curves_for_slice_2d(p_slice_2d, iso_p_base + off_p, X, Y)
-            p_ls = vut.curves_to_lineset(p_curves, z)
-            if p_ls is not None:
-                self._profile_geom = p_ls
-                p_mat = rendering.MaterialRecord()
-                p_mat.shader = "unlitLine"
-                p_mat.line_width = 1.0
-                p_mat.base_color = [0.8, 0.8, 0.8, 0.6]  # Semi-transparent light gray
-                self._scene_widget.scene.add_geometry("profile", p_ls, p_mat)
+        self._status.text = f"Slice {inputs['slice_idx']} | iso {inputs['iso']:.6g} | curves {geoms['curve_count']}"
 
-        # 3. Extract and show Bracing Curves (Reference)
-        if brac is not None:
-            off_b = self._bracing_offset_slider.double_value if idx_tab == 0 else 0.0
-            b_slice_2d = brac[idx].reshape((ny, nx))
-            b_curves = core.iso_curves_for_slice_2d(b_slice_2d, iso_b_base + off_b, X, Y)
-            b_ls = vut.curves_to_lineset(b_curves, z)
-            if b_ls is not None:
-                self._bracing_geom = b_ls
-                b_mat = rendering.MaterialRecord()
-                b_mat.shader = "unlitLine"
-                b_mat.line_width = 1.0
-                b_mat.base_color = [0.2, 0.8, 0.2, 0.6]  # Semi-transparent Green
-                self._scene_widget.scene.add_geometry("bracing", b_ls, b_mat)
-
-        self._status.text = f"Slice {idx} | iso {iso:.6g} | curves {len(curves)}"
-
-        # Compute bbox from current geometries
+        # Compute bbox
         bbox = None
-        for g in (self._curves_geom, self._profile_geom, self._bracing_geom, self._overlay_geom):
-            if g is None:
-                continue
+        for g in (self._curves_geom, self._profile_geom, self._bracing_geom):
+            if g is None: continue
             try:
                 gb = g.get_axis_aligned_bounding_box()
-            except Exception:
-                continue
+            except Exception: continue
             
             if bbox is None:
                 bbox = gb
@@ -777,6 +811,11 @@ class NarniaCurveViewer:
 
         if fit_camera:
             self._fit_camera_to_current()
+
+    def _update_scene(self, fit_camera: bool):
+        inputs = self._collect_scene_inputs()
+        geoms = self._build_geometries(inputs)
+        self._apply_geometries(geoms, inputs, fit_camera)
 
     def _fit_camera_to_current(self):
         bbox = self._current_bbox

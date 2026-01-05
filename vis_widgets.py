@@ -56,3 +56,24 @@ def create_file_input_row(label_text, default_path, on_browse_callback):
     h.add_child(btn)
     v.add_child(h)
     return v, tedit
+
+def show_file_dialog(window, title, on_done, mode=gui.FileDialog.OPEN, filters=None):
+    """
+    Helper to show an Open3D file dialog with standard cancel behavior.
+    """
+    dlg = gui.FileDialog(mode, title, window.theme)
+    
+    if filters:
+        for ext, desc in filters:
+            dlg.add_filter(ext, desc)
+            
+    def on_cancel():
+        window.close_dialog()
+        
+    def on_done_wrapper(path):
+        window.close_dialog()
+        on_done(path)
+
+    dlg.set_on_cancel(on_cancel)
+    dlg.set_on_done(on_done_wrapper)
+    window.show_dialog(dlg)
