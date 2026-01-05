@@ -1,4 +1,4 @@
-import open3d.visualization.gui as gui
+from open3d.visualization import gui
 
 def create_slider_row(label_text, min_val, max_val, init_val, on_change_callback, is_int=False):
     v = gui.Vert(0, gui.Margins(0, 0, 0, 0))

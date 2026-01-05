@@ -5,8 +5,8 @@ from datetime import datetime
 
 import numpy as np
 import open3d as o3d
-import open3d.visualization.gui as gui
-import open3d.visualization.rendering as rendering
+from open3d.visualization import gui
+from open3d.visualization import rendering
 
 import core
 import vis_utils as vut
