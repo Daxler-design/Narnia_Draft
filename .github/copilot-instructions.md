@@ -52,7 +52,7 @@
 - End by listing: what changed + what intentionally did NOT change.
 
 ## Minimal smoke tests (must pass)
-1) `python main.py` launches the window.
+1) `python main.py` launches the window, aware virtual environment.
 2) Compute tab: load/generate + slice/iso updates without crash.
 3) Export `.npz` succeeds and preserves existing keys.
 4) NPZ tab: load exported file + switch view + slice/iso updates without crash.

@@ -20,9 +20,28 @@ if FORCE_SOFTWARE_GL:
 
 import numpy as np
 import open3d as o3d
-from typing import Optional
+from typing import Optional, Tuple
 import ctypes
 from ctypes import wintypes
+from dataclasses import dataclass
+
+@dataclass
+class ViewState:
+    """Holds the state for a single view context (Compute or NPZ Viewer)."""
+    profile: Optional[np.ndarray] = None
+    bracing: Optional[np.ndarray] = None
+    result: Optional[np.ndarray] = None
+    
+    # Base iso levels
+    iso_p_base: float = 0.0
+    iso_b_base: float = 0.0
+    
+    # Bounds
+    bounds_min: Optional[np.ndarray] = None
+    bounds_max: Optional[np.ndarray] = None
+    
+    # Grid: (nx, ny, X, Y)
+    grid: Tuple = (None, None, None, None)
 
 def print_system_diagnostics():
     print("--- System Diagnostics ---")
