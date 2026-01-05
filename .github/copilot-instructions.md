@@ -1,84 +1,160 @@
-# SDF Bracing Generation Codebase Guide
+# Narnia – Cell-Wall Bracing (Hybrid OT + Field) Implementation Guide
 
-## Project Overview
+This guide is a step-by-step plan to replace **per-slice Voronoi-ridge bracing** with **continuous 3D “cell walls”** that:
+- follow the cavity/profile geometry (no “emerge out of nowhere”),
+- transition smoothly across slices,
+- support varying cell count/density along Z,
+- produce a mesh-ready implicit field.
 
-This is a **Signed Distance Field (SDF) post-processing pipeline** for architectural brace/structural bracing design. The workflow processes volumetric SDF data stored in JSON format, performs geometric operations, generates Voronoi-based bracing patterns, and exports results for downstream use.
+The approach is **field-first**:
+> Build a *single* coherent bracing **volume** (implicit field) and slice it, rather than building unrelated 2D drawings.
 
-## Setup
-- Install runtime dependencies with `pip install -r requirements.txt` before running the scripts or viewer from another machine.
+---
 
-## Architecture & Data Flow
+## 0. Vocabulary
 
-```
-JSON Input (SDF Stack Fields)
-    ↓
-[core.py] Parse & Stack → 2D scalar arrays (num_fields × values_per_field)
-    ↓
-[main.py] Load fields → validate shape/bounds
-    ↓
-[core.py] Boolean ops (union/intersection/difference)
-    ↓
-[core.py] Generate Voronoi bracing (K-Means centroids → Voronoi SDF)
-    ↓
-[core.py] Extract Iso-curves (matplotlib contour engine)
-    ↓
-Output: NPZ file with result fields, JSON/NPZ with curves
-```
+- **Profile field** `P[z,y,x]`: your existing scalar field stack (SDF-ish).
+- **Inside mask** `M[z,y,x]`: `P < iso_level`.
+- **Seeds / generators** `S[z,k,2]`: cell centers per slice with stable IDs.
+- **Soft assignment** `Q[z,k,y,x]`: probability (or weight) of region k at each pixel.
+- **Wall field** `W[z,y,x]`: high values where multiple regions compete (cell boundaries).
+- **Wall SDF** `Bw[z,y,x]`: signed distance-like field of walls (after thickening).
+- **Final solid** `F`: combined (double wall + internal cell walls) implicit volume.
 
-## Key Components & Patterns
+---
 
-### 1. **core.py** - Integrated Logic
-Consolidates all geometric and data processing logic (formerly in `sf_tools.py` and `sf_bracing.py`).
-- **Data Handling**: `stack_scalar_fields`, `meta_data_info`, `infer_grid_from_scalar_fields`.
-- **Geometric Ops**: `compute_sf_operation` (Boolean SDF), `iso_curves_for_slice_2d`.
-- **Bracing Logic**: `get_profile_mask`, `generate_centroids` (K-Means), `compute_voronoi_sdf`, `constrain_centroids_to_mask`.
+## 1. Key Design Choices (to prevent “popping”)
 
-### 2. **main.py** - Production Pipeline
-The primary entry point for batch processing.
-- Orchestrates the full workflow: Load → Stack → Boolean Op → Curve Extraction → Save.
-- Designed for CLI/headless execution (no GUI/plotting).
-- Saves results to `.npz` for downstream CAD/analysis.
+### 1.1 Use *soft* regions, not hard Voronoi labels
+Hard Voronoi diagrams can change topology abruptly when seeds move.  
+Instead, compute **softmax over distances**:
 
-### 3. **notebook_preview.py** - Visualization Utilities
-Contains all functions intended for interactive use in Jupyter Notebooks.
-- **`plot_scalar_overview()`**: Histogram + thumbnail grid for field inspection.
-- **`show_slice()`**: Detailed view of a single slice with contour overlays.
+- Distance to seed k: `Dk(x) = ||x - s_k||`
+- Soft region weight: `Qk(x) = softmax(-Dk / tau)`
 
-### 4. **251121_sf_postProcess.ipynb** - Interactive Exploration
-- Used for prototyping and parameter tweaking.
-- Imports from `core.py` and `notebook_preview.py`.
+`tau` controls sharpness.
 
-## Data Format Conventions
+### 1.2 Define walls from **competition**, not from a particular ridge formula
+Cell walls appear where at least two regions have similar weights.
 
-### JSON Input Structure
-```json
-{
-  "iso_level": 0.0,
-  "slice_count": 50,
-  "bounds_min": [0, 0, 0],
-  "bounds_max": [100, 100, 100],
-  "scalar_field_values_0": [...],
-  ...
-}
-```
+Good wall strength definitions:
+- `W = 1 - (top1 - top2)`  (needs normalization)
+- `W = entropy(Q)`  (high where uncertain)
+- `W = 1 / (eps + (d2 - d1))` from weighted distances (optional)
 
-### Grid Assumption
-- Scalar fields flatten to 1D: `values_per_field = nx × ny`.
-- Grid is **always square**: `nx == ny == sqrt(values_per_field)`.
-- Grid indexing: `(ny, nx)` = `(rows, cols)` = array indexing; centroid format `[y, x]`.
+### 1.3 Make the process 3D-consistent
+After you compute `W[z,y,x]`, apply **z-regularization**:
+- `gaussian_filter(W, sigma=(sigma_z, sigma_y, sigma_x))` with small `sigma_z`
+- or 1D smoothing along Z only.
 
-## Common Tasks & Patterns
+---
 
-### Adding a New Field Operation
-1. Implement in `core.py` following `compute_sf_operation()` signature.
-2. Call from `main.py` or notebook.
+## 2. Implementation Milestones (recommended order)
 
-### Debugging Shape Mismatches
-- Always call `core.infer_grid_from_scalar_fields()` first to validate square grid.
-- Check JSON: ensure `slice_count × sqrt(values_per_field)` matches expectations.
+### Milestone A — Cell wall field per slice (no OT yet)
+Goal: replace `compute_voronoi_sdf()` usage with a **cell-wall field** that looks meaningful in one slice.
 
-## Performance Notes
+Deliverables:
+- `compute_soft_regions(XY, seeds, tau)` → per-pixel soft weights `Qk`
+- `compute_wall_strength(Qk)` → `W`
+- `thicken_wall_field(W, thickness_px)` → bracing field `B`
 
-- **Windows OpenMP issue**: Set `os.environ["OMP_NUM_THREADS"] = "1"` if using `sklearn` in parallel contexts.
-- **K-Means coherence**: Use `prev_centroids` in `generate_centroids` to prevent jumping between slices.
-- **Iso-curve extraction**: Uses `matplotlib.pyplot` internally; `core.py` handles figure cleanup to prevent memory leaks.
+Acceptance:
+- On a single slice, walls align between cells and are not speckled.
+- `B` can be combined with your existing boolean ops.
+
+### Milestone B — Stable seeds across slices (no OT yet)
+Goal: remove slice-to-slice random changes without introducing weird births.
+
+Deliverables:
+- stable seed IDs via Hungarian assignment between consecutive slices,
+- a conservative “split” rule to add seeds where needed,
+- a schedule for target cell counts per slice (K schedule).
+
+Acceptance:
+- seeds move smoothly across z,
+- adding a seed occurs in a predictable place (largest cell / farthest-point within a region),
+- walls don’t jump.
+
+### Milestone C — OT-guided transport (seed advection with geometry)
+Goal: seeds follow geometry deformation instead of “sliding” independently.
+
+Deliverables:
+- `compute_ot_map(mask_i, mask_{i+1})` producing sparse correspondences,
+- `fit_dense_warp(corr)` producing a smooth displacement field `u(x)`,
+- apply warp to advect seeds: `s_{i+1,pred} = s_i + u(s_i)`.
+
+Acceptance:
+- if the cavity shifts/rotates, walls follow it with minimal lag,
+- far fewer “unexplained” changes.
+
+### Milestone D — 3D wall volume + final meshing hook
+Goal: produce a watertight 3D implicit bracing volume ready for meshing.
+
+Deliverables:
+- `W[z,y,x]` full volume,
+- `Bw[z,y,x]` (thickened wall solid field),
+- (optional) marching cubes export.
+
+Acceptance:
+- bracing looks continuous when scrubbing slices,
+- exported mesh is continuous (no holes from inconsistent slices).
+
+---
+
+## 3. Parameter Recommendations (starting points)
+
+- `tau` (softmax temperature): 2–6 pixels
+- `sigma_z` (z smoothing): 0.6–1.2 slices
+- `thickness_px` (wall thickness): 1–3 pixels (later convert to mm)
+- K schedule: linear or piecewise (slow growth early, faster mid)
+
+---
+
+## 4. OT Module (practical version)
+
+OT is used for **transport**, not for “generating walls”.
+
+**Minimal OT**:
+1. Sample N points from inside mask on slice i and i+1 (or boundary band).
+2. Compute cost matrix `C = ||xi - yj||^2`.
+3. Solve entropic Sinkhorn for coupling `Pi`.
+4. Compute barycentric map for each xi: `T(xi) = Σ_j Pi_ij * yj / Σ_j Pi_ij`.
+5. Fit a smooth warp from correspondences (thin-plate / RBF) to a dense displacement field.
+
+Use SciPy:
+- `scipy.interpolate.Rbf` (thin-plate) or a small custom TPS solve.
+
+---
+
+## 5. Integration Notes (keep viewer stable)
+
+- Keep `generate_bracing_json(...)` but allow a new mode: `"cell_walls"`.
+- Keep the output as scalar fields per slice so the viewer (contours) keeps working.
+- Do *not* attempt to interpolate contours directly. Always build fields first.
+
+---
+
+## 6. Debug Outputs (high value)
+Export these arrays to NPZ:
+- `seeds[z,k,2]`
+- `Q` summary: top1/top2 per slice
+- `W[z]` wall strength
+- adjacency stability metrics
+
+---
+
+## 7. Common Failure Modes & Fixes
+
+- **Walls look noisy** → increase `tau`, add XY smoothing, enforce seeds inside mask band.
+- **Walls fade in/out** → increase z-smoothing, use transport (OT), avoid per-slice re-init.
+- **New walls pop** → births must be farthest-point inside largest cell + ramp tau locally.
+- **Walls cross boundary** → clamp `Q` to 0 outside mask, renormalize.
+
+---
+
+## 8. What “Done” Looks Like
+- Scrubbing slices shows walls that bend/shift, not teleport.
+- New walls appear as a gradual split of a larger cell, not from empty space.
+- A 3D mesh extraction produces a continuous internal cell-wall network between double walls.
+

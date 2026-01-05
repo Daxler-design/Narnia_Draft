@@ -255,6 +255,8 @@ class NarniaCurveViewer:
         self._n_result: Optional[np.ndarray] = None
         self._n_profile: Optional[np.ndarray] = None
         self._n_bracing: Optional[np.ndarray] = None
+        self._n_W: Optional[np.ndarray] = None
+        self._n_B: Optional[np.ndarray] = None
         self._n_bounds_min = None
         self._n_bounds_max = None
         self._n_grid = (None, None, None, None) # nx, ny, X, Y
@@ -471,6 +473,14 @@ class NarniaCurveViewer:
             if brac_fields is not None and brac_fields.ndim == 0:
                 brac_fields = None
 
+            W_fields = data.get("W", None)
+            if W_fields is not None and W_fields.ndim == 0:
+                W_fields = None
+
+            B_fields = data.get("B", None)
+            if B_fields is not None and B_fields.ndim == 0:
+                B_fields = None
+
             # Try to get bounds from NPZ, fallback to current if available
             current_bmin = self._n_bounds_min if self._n_bounds_min is not None else self._c_bounds_min
             current_bmax = self._n_bounds_max if self._n_bounds_max is not None else self._c_bounds_max
@@ -485,15 +495,17 @@ class NarniaCurveViewer:
             self._n_result = res_fields
             self._n_profile = prof_fields
             self._n_bracing = brac_fields
+            self._n_W = W_fields
+            self._n_B = B_fields
             
             self._n_bounds_min = bmin
             self._n_bounds_max = bmax
             self._n_iso_base = iso
-            
-            num_fields, nx, ny = core.infer_grid_from_scalar_fields(res_fields)
-            x = np.linspace(bmin[0], bmax[0], nx)
-            y = np.linspace(bmin[1], bmax[1], ny)
-            X, Y = np.meshgrid(x, y, indexing="xy")
+
+            nx_meta = data.get("nx", None)
+            ny_meta = data.get("ny", None)
+            num_fields, nx, ny = core.infer_grid_from_scalar_fields(res_fields, nx=nx_meta, ny=ny_meta)
+            _, _, X, Y = core.xy_grid_from_bounds(bmin, bmax, nx, ny)
             self._n_grid = (nx, ny, X, Y)
 
             # Update View Selector
@@ -503,6 +515,10 @@ class NarniaCurveViewer:
                 self._n_view_selector.add_item("Profile")
             if self._n_bracing is not None:
                 self._n_view_selector.add_item("Bracing")
+            if self._n_W is not None:
+                self._n_view_selector.add_item("WallStrength")
+            if self._n_B is not None:
+                self._n_view_selector.add_item("WallField")
             self._n_view_selector.selected_index = 0
 
             self._tabs.selected_tab_index = 1
@@ -589,7 +605,7 @@ class NarniaCurveViewer:
         
         self._c_bounds_min = bmin_p
         self._c_bounds_max = bmax_p
-        num_fields, nx, ny = core.infer_grid_from_scalar_fields(self._c_profile)
+        num_fields, nx, ny = core.infer_grid_from_scalar_fields(self._c_profile, metadata=data_profile)
 
         if self._chk_generate_bracing.checked:
             self._status.text = "Generating bracing..."
@@ -609,7 +625,10 @@ class NarniaCurveViewer:
                 k_max=k_end,
                 iso_level=self._c_iso_p_base or 0.0,
                 ramp=ramp_val,
-                smooth_sigma=smooth_val
+                smooth_sigma=smooth_val,
+                nx=nx,
+                ny=ny,
+                metadata=data_profile,
             )
             
             self._c_iso_b_base = 0.0
@@ -633,9 +652,7 @@ class NarniaCurveViewer:
         
         self._update_boolean_result()
 
-        x = np.linspace(self._c_bounds_min[0], self._c_bounds_max[0], nx)
-        y = np.linspace(self._c_bounds_min[1], self._c_bounds_max[1], ny)
-        X, Y = np.meshgrid(x, y, indexing="xy")
+        _, _, X, Y = core.xy_grid_from_bounds(self._c_bounds_min, self._c_bounds_max, nx, ny)
         self._c_grid = (nx, ny, X, Y)
 
         self._update_slider_ranges()
@@ -660,9 +677,7 @@ class NarniaCurveViewer:
             self._status.text = f"Load error: {e}"
             return
 
-        x = np.linspace(self._c_bounds_min[0], self._c_bounds_max[0], nx)
-        y = np.linspace(self._c_bounds_min[1], self._c_bounds_max[1], ny)
-        X, Y = np.meshgrid(x, y, indexing="xy")
+        _, _, X, Y = core.xy_grid_from_bounds(self._c_bounds_min, self._c_bounds_max, nx, ny)
         self._c_grid = (nx, ny, X, Y)
 
         self._tabs.selected_tab_index = 0
@@ -711,6 +726,12 @@ class NarniaCurveViewer:
             elif sel_text == "Bracing":
                 res = self._n_bracing
                 curve_color = [0.2, 0.8, 0.2, 1.0] # Green
+            elif sel_text == "WallStrength":
+                res = self._n_W
+                curve_color = [0.95, 0.95, 0.95, 1.0]
+            elif sel_text == "WallField":
+                res = self._n_B
+                curve_color = [0.95, 0.95, 0.95, 1.0]
             else: # Result
                 res = self._n_result
                 prof = self._n_profile
