@@ -142,3 +142,113 @@ def constrain_centroids_to_mask(centroids, mask):
             nearest_idx = np.argmin(dists)
             constrained.append(valid_coords[nearest_idx])
     return np.array(constrained)
+
+def generate_bracing_static(profile_fields_2d, iso_level, nx, ny, k, seed=42):
+    """
+    Generate static bracing fields based on profile fields centroids.
+    """
+    num_fields = profile_fields_2d.shape[0]
+    bracing_fields = np.zeros_like(profile_fields_2d)
+    prev_centroids = None
+    
+    for i in range(num_fields):
+        slice_2d = profile_fields_2d[i].reshape((ny, nx))
+        mask = get_profile_mask(slice_2d, iso_level=iso_level)
+        
+        centroids = generate_centroids(mask, k=k, prev_centroids=prev_centroids, seed=seed)
+        centroids = constrain_centroids_to_mask(centroids, mask)
+        
+        voronoi_sdf_flat = compute_voronoi_sdf((ny, nx), centroids)
+        bracing_fields[i] = voronoi_sdf_flat.ravel()
+        prev_centroids = centroids
+        
+        if i % 10 == 0:
+            print(f"Generated bracing for slice {i}/{num_fields}")
+            
+    return bracing_fields
+
+def generate_bracing_key_blending(profile_fields_2d, iso_level, nx, ny, k, key_step=5, smooth=0.0, seed=42):
+    """
+    Generate bracing fields using key-frame blending.
+    """
+    import itertools
+    
+    num_fields = profile_fields_2d.shape[0]
+    bracing_fields = np.zeros_like(profile_fields_2d)
+    
+    # 1. Identify key slices
+    key_indices = list(range(0, num_fields, key_step))
+    if key_indices[-1] != num_fields - 1:
+        key_indices.append(num_fields - 1)
+        
+    # 2. Generate centroids for key slices
+    key_centroids = {}
+    for idx in key_indices:
+        slice_2d = profile_fields_2d[idx].reshape((ny, nx))
+        mask = get_profile_mask(slice_2d, iso_level=iso_level)
+        # Independent K-Means for each key frame
+        centroids = generate_centroids(mask, k=k, prev_centroids=None, seed=seed)
+        key_centroids[idx] = centroids
+
+    # 3. Match and Interpolate
+    for i in range(len(key_indices) - 1):
+        idx_start = key_indices[i]
+        idx_end = key_indices[i+1]
+        
+        c_start = key_centroids[idx_start]
+        c_end = key_centroids[idx_end]
+        
+        # Match c_end to c_start using brute-force permutation (k is small)
+        best_perm = None
+        min_dist = float('inf')
+        
+        perms = list(itertools.permutations(range(k)))
+        for perm in perms:
+            dist = 0
+            for j in range(k):
+                dist += np.linalg.norm(c_start[j] - c_end[perm[j]])
+            if dist < min_dist:
+                min_dist = dist
+                best_perm = perm
+                
+        c_end_ordered = c_end[list(best_perm)]
+        
+        # Update the stored key centroid for the next segment start
+        key_centroids[idx_end] = c_end_ordered
+        c_end = c_end_ordered
+        
+        # Interpolate
+        steps = idx_end - idx_start
+        for j in range(steps):
+            curr_idx = idx_start + j
+            t = j / float(steps)
+            
+            # Apply smoothing to t (Linear -> Smoothstep)
+            if smooth > 0:
+                t_smooth = t * t * (3 - 2 * t)
+                t = (1 - smooth) * t + smooth * t_smooth
+            
+            # Interpolation
+            c_curr = (1 - t) * c_start + t * c_end
+            
+            # Constrain to mask
+            slice_2d = profile_fields_2d[curr_idx].reshape((ny, nx))
+            mask = get_profile_mask(slice_2d, iso_level=iso_level)
+            c_curr = constrain_centroids_to_mask(c_curr, mask)
+            
+            # Compute SDF
+            voronoi_sdf_flat = compute_voronoi_sdf((ny, nx), c_curr)
+            bracing_fields[curr_idx] = voronoi_sdf_flat.ravel()
+            
+            if curr_idx % 10 == 0:
+                print(f"Generated bracing for slice {curr_idx}/{num_fields}")
+
+    # Handle the very last frame
+    last_idx = key_indices[-1]
+    slice_2d = profile_fields_2d[last_idx].reshape((ny, nx))
+    mask = get_profile_mask(slice_2d, iso_level=iso_level)
+    c_last = constrain_centroids_to_mask(key_centroids[last_idx], mask)
+    voronoi_sdf_flat = compute_voronoi_sdf((ny, nx), c_last)
+    bracing_fields[last_idx] = voronoi_sdf_flat.ravel()
+    
+    return bracing_fields
