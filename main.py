@@ -6,7 +6,7 @@ import core
 import vis_utils as vut
 
 # --- CONFIGURATION ---
-GENERATE_BRACING = True
+GENERATE_BRACING = False
 SAVE_RESULTS = True
 EXTRACT_CURVES = False # Set to True if you need curves exported
 LAUNCH_VIEWER = True
@@ -19,7 +19,7 @@ OP_MODE = "difference" # difference, union, intersection
 # Bracing Method
 # - "voronoi": existing ridge-style bracing
 # - "cell_wall": field-first cell wall bracing (W/B volumes)
-BRACING_METHOD = "cell_wall"
+BRACING_METHOD = "voronoi"
 
 # Cell-wall Parameters
 CELL_TAU = 12.0
@@ -74,7 +74,7 @@ def main():
         profile_fields_2d, _ = core.stack_scalar_fields(data_profile)
 
     # Prefer explicit nx/ny if present; otherwise fall back (legacy square-grid inference).
-    _, nx, ny = core.infer_grid_from_scalar_fields(profile_fields_2d, metadata=data_profile)
+    _, nx, ny = core.infer_grid_from_scalar_fields(profile_fields_2d)
     
     # 2. Generate or Load Bracing
     if GENERATE_BRACING:
