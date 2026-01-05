@@ -13,7 +13,7 @@ LAUNCH_VIEWER = True
 
 # Bracing Parameters
 NUM_CENTROIDS_START = 3
-NUM_CENTROIDS_END = 8  # Interpolate from 3 to 8
+NUM_CENTROIDS_END = 4  # Interpolate from 3 to 8
 OP_MODE = "difference" # difference, union, intersection
 
 # Bracing Method
@@ -34,8 +34,8 @@ CELL_RAMP_SLICES = 5
 USE_OT_TRANSPORT = True
 OT_NUM_SAMPLES = 600
 OT_BAND_PX = 6.0
-OT_EPSILON = 8.0
-OT_MAX_ITER = 200
+OT_EPSILON = 12.0
+OT_MAX_ITER = 400
 OT_TOL = 1e-3
 OT_RBF_SMOOTH = 5.0
 OT_MAX_DISP_PX = 20.0

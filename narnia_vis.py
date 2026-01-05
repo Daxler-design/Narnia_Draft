@@ -76,6 +76,95 @@ class NarniaCurveViewer:
         self._chk_generate_bracing.checked = True
         self._chk_generate_bracing.set_on_checked(self._on_generate_toggled)
 
+        # Bracing Method
+        self._bracing_method_combo = gui.Combobox()
+        self._bracing_method_combo.add_item("voronoi")
+        self._bracing_method_combo.add_item("cell_wall")
+        self._bracing_method_combo.selected_index = 1  # Default to cell_wall
+
+        # --- Cell Wall Settings ---
+        self._cell_wall_settings = gui.CollapsableVert("Cell Wall Settings", 0, gui.Margins(10, 0, 0, 0))
+        
+        row_tau, self._cell_tau_slider, self._cell_tau_edit = vwg.create_slider_row(
+            "Tau (Softmax Temp)", 1.0, 30.0, 12.0, None
+        )
+        
+        self._cell_wall_method_combo = gui.Combobox()
+        self._cell_wall_method_combo.add_item("entropy")
+        self._cell_wall_method_combo.add_item("top2gap")
+        
+        row_smooth_xy, self._cell_smooth_xy_slider, self._cell_smooth_xy_edit = vwg.create_slider_row(
+            "Smooth XY Sigma", 0.0, 5.0, 1.0, None
+        )
+        
+        row_wall_thresh, self._cell_wall_threshold_slider, self._cell_wall_threshold_edit = vwg.create_slider_row(
+            "Wall Threshold", 0.0, 1.0, 0.6, None
+        )
+        
+        row_wall_thick, self._cell_wall_thickness_slider, self._cell_wall_thickness_edit = vwg.create_slider_row(
+            "Wall Thickness (px)", 0.5, 10.0, 2.0, None
+        )
+        
+        row_smooth_z, self._cell_smooth_z_slider, self._cell_smooth_z_edit = vwg.create_slider_row(
+            "Smooth Z Sigma", 0.0, 5.0, 0.75, None
+        )
+        
+        row_ramp_slices, self._cell_ramp_slices_slider, self._cell_ramp_slices_edit = vwg.create_slider_row(
+            "Ramp Slices", 1, 20, 5, None, is_int=True
+        )
+
+        self._cell_wall_settings.add_child(row_tau)
+        self._cell_wall_settings.add_child(gui.Label("Wall Method"))
+        self._cell_wall_settings.add_child(self._cell_wall_method_combo)
+        self._cell_wall_settings.add_child(row_smooth_xy)
+        self._cell_wall_settings.add_child(row_wall_thresh)
+        self._cell_wall_settings.add_child(row_wall_thick)
+        self._cell_wall_settings.add_child(row_smooth_z)
+        self._cell_wall_settings.add_child(row_ramp_slices)
+
+        # --- OT Transport Settings ---
+        self._ot_settings = gui.CollapsableVert("OT Transport Settings", 0, gui.Margins(10, 0, 0, 0))
+        
+        self._use_ot_transport_chk = gui.Checkbox("Use OT Transport")
+        self._use_ot_transport_chk.checked = True
+        
+        row_ot_samples, self._ot_num_samples_slider, self._ot_num_samples_edit = vwg.create_slider_row(
+            "Num Samples", 100, 2000, 600, None, is_int=True
+        )
+        
+        row_ot_band, self._ot_band_px_slider, self._ot_band_px_edit = vwg.create_slider_row(
+            "Band Px", 1.0, 20.0, 6.0, None
+        )
+        
+        row_ot_eps, self._ot_epsilon_slider, self._ot_epsilon_edit = vwg.create_slider_row(
+            "Epsilon", 1.0, 50.0, 12.0, None
+        )
+        
+        row_ot_iter, self._ot_max_iter_slider, self._ot_max_iter_edit = vwg.create_slider_row(
+            "Max Iter", 100, 2000, 400, None, is_int=True
+        )
+        
+        row_ot_tol, self._ot_tol_slider, self._ot_tol_edit = vwg.create_slider_row(
+            "Tolerance", 1e-4, 1e-1, 1e-3, None
+        )
+        
+        row_ot_rbf, self._ot_rbf_smooth_slider, self._ot_rbf_smooth_edit = vwg.create_slider_row(
+            "RBF Smooth", 0.1, 20.0, 5.0, None
+        )
+        
+        row_ot_disp, self._ot_max_disp_px_slider, self._ot_max_disp_px_edit = vwg.create_slider_row(
+            "Max Disp Px", 1.0, 100.0, 20.0, None
+        )
+
+        self._ot_settings.add_child(self._use_ot_transport_chk)
+        self._ot_settings.add_child(row_ot_samples)
+        self._ot_settings.add_child(row_ot_band)
+        self._ot_settings.add_child(row_ot_eps)
+        self._ot_settings.add_child(row_ot_iter)
+        self._ot_settings.add_child(row_ot_tol)
+        self._ot_settings.add_child(row_ot_rbf)
+        self._ot_settings.add_child(row_ot_disp)
+
         # Start K Slider
         row_k_start, self._k_start_slider, self._k_start_edit = vwg.create_slider_row(
             "Start K", 1, 12, 3, None, is_int=True
@@ -123,10 +212,16 @@ class NarniaCurveViewer:
         self._compute_panel.add_child(row_brac)
         self._compute_panel.add_fixed(10)
         self._compute_panel.add_child(self._chk_generate_bracing)
+        self._compute_panel.add_child(gui.Label("Bracing Method"))
+        self._compute_panel.add_child(self._bracing_method_combo)
+        self._compute_panel.add_fixed(5)
         self._compute_panel.add_child(row_k_start)
         self._compute_panel.add_child(row_k_end)
         self._compute_panel.add_child(row_ramp)
         self._compute_panel.add_child(row_smooth)
+        self._compute_panel.add_fixed(5)
+        self._compute_panel.add_child(self._cell_wall_settings)
+        self._compute_panel.add_child(self._ot_settings)
         self._compute_panel.add_fixed(10)
         self._compute_panel.add_child(self._btn_compute)
         self._compute_panel.add_fixed(16)
@@ -616,20 +711,82 @@ class NarniaCurveViewer:
             ramp_val = int(self._ramp_slider.int_value)
             smooth_val = float(self._smooth_slider.double_value)
             
-            print(f"Generating bracing (Centroids: {k_start} -> {k_end}, Ramp: {ramp_val}, Smooth: {smooth_val})...")
+            method_idx = self._bracing_method_combo.selected_index
+            method_name = self._bracing_method_combo.get_item(method_idx)
             
-            # Use the new interpolated pipeline
-            self._c_bracing, _, _ = core.generate_interpolated_bracing_fields(
-                self._c_profile, 
-                k_min=k_start, 
-                k_max=k_end,
-                iso_level=self._c_iso_p_base or 0.0,
-                ramp=ramp_val,
-                smooth_sigma=smooth_val,
-                nx=nx,
-                ny=ny,
-                metadata=data_profile,
-            )
+            if method_name == "cell_wall":
+                print(f"Generating bracing (Cell Wall, Centroids: {k_start} -> {k_end})...")
+                
+                # Gather Cell Wall Params
+                c_tau = float(self._cell_tau_slider.double_value)
+                c_method = self._cell_wall_method_combo.get_item(self._cell_wall_method_combo.selected_index)
+                c_smooth_xy = float(self._cell_smooth_xy_slider.double_value)
+                c_thresh = float(self._cell_wall_threshold_slider.double_value)
+                c_thick = float(self._cell_wall_thickness_slider.double_value)
+                c_smooth_z = float(self._cell_smooth_z_slider.double_value)
+                c_ramp = int(self._cell_ramp_slices_slider.int_value)
+                
+                # Gather OT Params
+                use_ot = self._use_ot_transport_chk.checked
+                ot_samples = int(self._ot_num_samples_slider.int_value)
+                ot_band = float(self._ot_band_px_slider.double_value)
+                ot_eps = float(self._ot_epsilon_slider.double_value)
+                ot_iter = int(self._ot_max_iter_slider.int_value)
+                ot_tol = float(self._ot_tol_slider.double_value)
+                ot_rbf = float(self._ot_rbf_smooth_slider.double_value)
+                ot_disp = float(self._ot_max_disp_px_slider.double_value)
+                
+                num_slices = self._c_profile.shape[0]
+                masks = np.zeros((num_slices, ny, nx), dtype=bool)
+                for i in range(num_slices):
+                    masks[i] = core.get_profile_mask(self._c_profile[i].reshape((ny, nx)), iso_level=self._c_iso_p_base)
+
+                k_schedule = np.linspace(k_start, k_end, num_slices).astype(int)
+                k0 = int(k_schedule[0]) if num_slices > 0 else 0
+
+                init_seeds = core.generate_centroids(masks[0], k=k0, seed=42)
+                seeds, ramp_weights, report = core.track_seeds_with_splits(
+                    masks,
+                    k_schedule,
+                    init_seeds,
+                    ramp_slices=c_ramp,
+                    use_ot_transport=use_ot,
+                    ot_num_samples=ot_samples,
+                    ot_band_px=ot_band,
+                    ot_epsilon=ot_eps,
+                    ot_max_iter=ot_iter,
+                    ot_tol=ot_tol,
+                    ot_rbf_smooth=ot_rbf,
+                    ot_max_disp_px=ot_disp,
+                )
+                W, B = core.compute_volume_cell_walls(
+                    masks,
+                    seeds,
+                    ramp_weights,
+                    tau=c_tau,
+                    wall_method=c_method,
+                    smooth_sigma_xy=c_smooth_xy,
+                    threshold=c_thresh,
+                    thickness_px=c_thick,
+                    sigma_z=c_smooth_z,
+                )
+                self._c_bracing = B.reshape((num_slices, -1))
+                
+            else:
+                print(f"Generating bracing (Voronoi, Centroids: {k_start} -> {k_end}, Ramp: {ramp_val}, Smooth: {smooth_val})...")
+                
+                # Use the existing interpolated pipeline
+                self._c_bracing, _, _ = core.generate_interpolated_bracing_fields(
+                    self._c_profile, 
+                    k_min=k_start, 
+                    k_max=k_end,
+                    iso_level=self._c_iso_p_base or 0.0,
+                    ramp=ramp_val,
+                    smooth_sigma=smooth_val,
+                    nx=nx,
+                    ny=ny,
+                    metadata=data_profile,
+                )
             
             self._c_iso_b_base = 0.0
         else:
