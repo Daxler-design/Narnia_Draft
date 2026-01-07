@@ -82,7 +82,7 @@ class NarniaCurveViewer:
         self._gen_options_container.add_child(gui.Label("Generation Method"))
         self._gen_method_combo = gui.Combobox()
         self._gen_method_combo.add_item("static-bracing")
-        self._gen_method_combo.add_item("keyBlending-bracing")
+        self._gen_method_combo.add_item("Key-Field Blend")
         self._gen_method_combo.set_on_selection_changed(self._on_gen_method_changed)
         self._gen_options_container.add_child(self._gen_method_combo)
         self._gen_options_container.add_fixed(5)
@@ -97,17 +97,36 @@ class NarniaCurveViewer:
         # 2. KeyBlending Params
         self._keyblending_params = gui.Vert(0, gui.Margins(0, 0, 0, 0))
         
-        # Key Step
-        row_ks, self._kb_step_slider, self._kb_step_edit = vwg.create_slider_row(
-            "Key Step", 1, 50, 5, None, is_int=True
-        )
-        self._keyblending_params.add_child(row_ks)
+        # Key Config Text
+        self._keyblending_params.add_child(gui.Label("Keys (slice:k, ...)"))
+        self._kb_keys_edit = gui.TextEdit()
+        self._kb_keys_edit.text_value = "0:3, 30:4, 59:5"
+        self._keyblending_params.add_child(self._kb_keys_edit)
+        self._keyblending_params.add_fixed(5)
 
         # Smooth (Blend Factor)
         row_kb, self._kb_slider, self._kb_edit = vwg.create_slider_row(
             "Smooth Factor", 0.0, 1.0, 0.0, None
         )
         self._keyblending_params.add_child(row_kb)
+
+        # Sigma (Ridge Width)
+        row_sig, self._sigma_slider, self._sigma_edit = vwg.create_slider_row(
+            "Sigma (Ridge Width)", 1.0, 20.0, 5.0, None
+        )
+        self._keyblending_params.add_child(row_sig)
+        
+        # Tau (Threshold)
+        row_tau, self._tau_slider, self._tau_edit = vwg.create_slider_row(
+            "Tau (Threshold)", 0.0, 1.0, 0.5, None
+        )
+        self._keyblending_params.add_child(row_tau)
+
+        # Beta (SmoothMax)
+        row_beta, self._beta_slider, self._beta_edit = vwg.create_slider_row(
+            "Beta (Blend Softness)", 0.0, 20.0, 4.0, None
+        )
+        self._keyblending_params.add_child(row_beta)
 
         # Initial visibility
         self._static_params.visible = True
@@ -618,16 +637,34 @@ class NarniaCurveViewer:
             print(f"Generating bracing from centroids (k={k})...")
             
             method_idx = self._gen_method_combo.selected_index
-            if method_idx == 1: # keyBlending-bracing
+            if method_idx == 1: # Key-Field Blend
                 smooth_val = self._kb_slider.double_value
-                step_val = int(self._kb_step_slider.int_value)
-                print(f"KeyBlending: step={step_val}, smooth={smooth_val}")
-                self.compute_state.bracing = core.generate_bracing_key_blending(
+                sigma_val = self._sigma_slider.double_value
+                tau_val = self._tau_slider.double_value
+                beta_val = self._beta_slider.double_value
+                keys_str = self._kb_keys_edit.text_value
+                
+                # Parse keys
+                keys_config = []
+                try:
+                    for part in keys_str.split(','):
+                        s_idx, s_k = part.strip().split(':')
+                        keys_config.append((int(s_idx), int(s_k)))
+                except Exception as e:
+                    self._status.text = f"Invalid Key Config: {e}"
+                    print(f"Error parsing keys: {e}")
+                    return
+
+                print(f"Key-Field Blend: keys={keys_config}, smooth={smooth_val}, sigma={sigma_val}, tau={tau_val}, beta={beta_val}")
+                self.compute_state.bracing = core.generate_bracing_keyfield_blend(
                     self.compute_state.profile,
                     self.compute_state.iso_p_base or 0.0,
-                    nx, ny, k,
-                    key_step=step_val,
-                    smooth=smooth_val
+                    nx, ny, 
+                    keys_config=keys_config,
+                    smooth=smooth_val,
+                    sigma=sigma_val,
+                    tau=tau_val,
+                    beta=beta_val
                 )
             else: # static-bracing
                 self.compute_state.bracing = core.generate_bracing_static(
