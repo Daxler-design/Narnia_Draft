@@ -138,6 +138,34 @@ class NarniaCurveViewer:
 
         self._btn_compute = gui.Button("Load / Re-generate Bracing")
 
+        # --- Postprocess Bracing ---
+        self._postprocess_panel = gui.Vert(0, gui.Margins(0, 5, 0, 5))
+        self._postprocess_panel.add_child(gui.Label("--- Postprocess Bracing ---"))
+        
+        self._chk_enable_postprocess = gui.Checkbox("Enable Postprocess")
+        self._chk_enable_postprocess.checked = False
+        self._chk_enable_postprocess.set_on_checked(self._on_postprocess_param_changed)
+        self._postprocess_panel.add_child(self._chk_enable_postprocess)
+
+        # Close Radius (0–6)
+        row_close, self._pp_close_slider, self._pp_close_edit = vwg.create_slider_row(
+            "Close Radius", 0.0, 6.0, 0.0, self._on_postprocess_param_changed
+        )
+        self._postprocess_panel.add_child(row_close)
+
+        # Min Area (0–2000)
+        row_area, self._pp_area_slider, self._pp_area_edit = vwg.create_slider_row(
+            "Min Area", 0.0, 2000.0, 0.0, self._on_postprocess_param_changed
+        )
+        self._postprocess_panel.add_child(row_area)
+
+        # Temporal Window (1, 3, 5)
+        row_temp, self._pp_temp_slider, self._pp_temp_edit = vwg.create_slider_row(
+            "Temporal Window", 1, 5, 1, self._on_postprocess_param_changed, is_int=True
+        )
+        self._postprocess_panel.add_child(row_temp)
+
+
         self._op_mode_combo = gui.Combobox()
         self._op_mode_combo.add_item("difference")
         self._op_mode_combo.add_item("union")
@@ -167,6 +195,8 @@ class NarniaCurveViewer:
         self._compute_panel.add_child(self._gen_options_container)
         self._compute_panel.add_fixed(10)
         self._compute_panel.add_child(self._btn_compute)
+        self._compute_panel.add_fixed(10)
+        self._compute_panel.add_child(self._postprocess_panel)
         self._compute_panel.add_fixed(16)
         self._compute_panel.add_child(gui.Label("--- Boolean Operation ---"))
         self._compute_panel.add_child(gui.Label("Mode"))
@@ -346,14 +376,40 @@ class NarniaCurveViewer:
         self._update_boolean_result()
         self._update_scene(fit_camera=False)
 
+    def _on_postprocess_param_changed(self, *args):
+        if self.compute_state.bracing is None or self.compute_state.profile is None:
+            return
+            
+        if self._chk_enable_postprocess.checked:
+            state = self.compute_state
+            # Re-run cleaning logic on current raw bracing
+            state.bracing_clean = core.postprocess_bracing_fields(
+                state.bracing,
+                state.profile,
+                iso_profile=state.iso_p_base + self._profile_offset_slider.double_value,
+                iso_brace=state.iso_b_base + self._bracing_offset_slider.double_value,
+                close_radius=self._pp_close_slider.double_value,
+                min_area=self._pp_area_slider.double_value,
+                temporal_window=int(self._pp_temp_slider.double_value)
+            )
+        else:
+            self.compute_state.bracing_clean = None
+            
+        self._update_boolean_result()
+        self._update_scene(fit_camera=False)
+
+
     def _update_boolean_result(self):
         mode = self._op_mode_combo.get_item(self._op_mode_combo.selected_index)
         off_p = self._profile_offset_slider.double_value
         off_b = self._bracing_offset_slider.double_value
 
+        # Use bracing_clean if available, else fallback to bracing
+        brac = self.compute_state.bracing_clean if self.compute_state.bracing_clean is not None else self.compute_state.bracing
+
         self.compute_state.result = core.compute_sf_operation(
             self.compute_state.profile,
-            self.compute_state.bracing,
+            brac,
             iso_level_A=self.compute_state.iso_p_base + off_p,
             iso_level_B=self.compute_state.iso_b_base + off_b,
             mode=mode,
@@ -507,6 +563,10 @@ class NarniaCurveViewer:
             if brac_fields is not None and brac_fields.ndim == 0:
                 brac_fields = None
 
+            brac_clean = data.get("bracing_clean_fields", None)
+            if brac_clean is not None and brac_clean.ndim == 0:
+                brac_clean = None
+
             # Try to get bounds from NPZ, fallback to current if available
             current_bmin = self.viewer_state.bounds_min if self.viewer_state.bounds_min is not None else self.compute_state.bounds_min
             current_bmax = self.viewer_state.bounds_max if self.viewer_state.bounds_max is not None else self.compute_state.bounds_max
@@ -521,6 +581,7 @@ class NarniaCurveViewer:
             self.viewer_state.result = res_fields
             self.viewer_state.profile = prof_fields
             self.viewer_state.bracing = brac_fields
+            self.viewer_state.bracing_clean = brac_clean
             
             self.viewer_state.bounds_min = bmin
             self.viewer_state.bounds_max = bmax
@@ -586,7 +647,7 @@ class NarniaCurveViewer:
                     save_dict["profile_fields"] = prof
             
             if self._chk_export_bracing.checked:
-                brac = state.bracing
+                brac = state.bracing_clean if state.bracing_clean is not None else state.bracing
                 if brac is not None:
                     save_dict["bracing_fields"] = brac
 
@@ -690,15 +751,15 @@ class NarniaCurveViewer:
         if self.compute_state.bracing.shape != self.compute_state.profile.shape:
             raise ValueError("Bracing/Profile scalar field arrays must have the same shape")
 
-        self._status.text = "Computing boolean operation..."
-        self._window.set_needs_layout()
-        
-        self._update_boolean_result()
-
+        # Update grid info first so postprocess/boolean can use it
+        self.compute_state.grid = (nx, ny, None, None) # X,Y handled below
         x = np.linspace(self.compute_state.bounds_min[0], self.compute_state.bounds_max[0], nx)
         y = np.linspace(self.compute_state.bounds_min[1], self.compute_state.bounds_max[1], ny)
         X, Y = np.meshgrid(x, y, indexing="xy")
         self.compute_state.grid = (nx, ny, X, Y)
+
+        # Trigger postprocess logic (which also updates boolean and scene)
+        self._on_postprocess_param_changed()
 
         self._update_slider_ranges()
         self._c_iso_slider.double_value = 0.0
@@ -748,7 +809,7 @@ class NarniaCurveViewer:
             state = self.compute_state
             inputs["res"] = state.result
             inputs["prof"] = state.profile
-            # brac remains None for Compute tab
+            inputs["brac"] = state.bracing_clean if state.bracing_clean is not None else state.bracing
             
             inputs["bmin"], inputs["bmax"] = state.bounds_min, state.bounds_max
             inputs["nx"], inputs["ny"], inputs["X"], inputs["Y"] = state.grid
@@ -777,12 +838,12 @@ class NarniaCurveViewer:
                 inputs["res"] = state.profile
                 inputs["curve_color"] = [0.8, 0.8, 0.8, 1.0]
             elif sel_text == "Bracing":
-                inputs["res"] = state.bracing
-                inputs["curve_color"] = [0.2, 0.8, 0.2, 1.0]
+                inputs["res"] = state.bracing_clean if state.bracing_clean is not None else state.bracing
+                inputs["curve_color"] = [0.1, 0.7, 0.95, 1.0]
             else: # Result
                 inputs["res"] = state.result
                 inputs["prof"] = state.profile
-                inputs["brac"] = state.bracing
+                inputs["brac"] = state.bracing_clean if state.bracing_clean is not None else state.bracing
                 inputs["curve_color"] = [1.0, 0.5, 0.0, 1.0]
             
             # No offsets in NPZ viewer
@@ -800,6 +861,12 @@ class NarniaCurveViewer:
         ny, nx = inputs["ny"], inputs["nx"]
         X, Y = inputs["X"], inputs["Y"]
         z = vut.slice_z(idx, res.shape[0], inputs["bmin"], inputs["bmax"])
+
+        # Grid spacing (world units per pixel)
+        x_vec = X[0, :] if np.asarray(X).ndim == 2 else np.asarray(X)
+        y_vec = Y[:, 0] if np.asarray(Y).ndim == 2 else np.asarray(Y)
+        dx = float(abs(x_vec[1] - x_vec[0])) if x_vec.shape[0] > 1 else 1.0
+        dy = float(abs(y_vec[1] - y_vec[0])) if y_vec.shape[0] > 1 else 1.0
         
         geoms = {
             "curves": None, "profile": None, "bracing": None,
@@ -809,6 +876,9 @@ class NarniaCurveViewer:
         # 1. Main Curves
         slice_2d = res[idx].reshape((ny, nx))
         curves = core.iso_curves_for_slice_2d(slice_2d, inputs["iso"], X, Y)
+        
+        # No filtering/simplification
+
         geoms["curve_count"] = len(curves)
         ls = vut.curves_to_lineset(curves, z)
         if ls is not None:
@@ -834,12 +904,13 @@ class NarniaCurveViewer:
         if inputs["brac"] is not None:
             b_slice_2d = inputs["brac"][idx].reshape((ny, nx))
             b_curves = core.iso_curves_for_slice_2d(b_slice_2d, inputs["iso_b"], X, Y)
+            # No filtering/simplification
             b_ls = vut.curves_to_lineset(b_curves, z)
             if b_ls is not None:
                 b_mat = rendering.MaterialRecord()
                 b_mat.shader = "unlitLine"
                 b_mat.line_width = 1.0
-                b_mat.base_color = [0.2, 0.8, 0.2, 0.6]
+                b_mat.base_color = [0.1, 0.7, 0.95, 0.6]
                 geoms["bracing"] = (b_ls, b_mat)
                 
         return geoms

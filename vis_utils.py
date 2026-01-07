@@ -30,6 +30,7 @@ class ViewState:
     """Holds the state for a single view context (Compute or NPZ Viewer)."""
     profile: Optional[np.ndarray] = None
     bracing: Optional[np.ndarray] = None
+    bracing_clean: Optional[np.ndarray] = None
     result: Optional[np.ndarray] = None
     
     # Base iso levels

@@ -1,6 +1,7 @@
 import numpy as np
 from sklearn.cluster import KMeans
 from scipy.spatial import cKDTree
+import scipy.ndimage as ndimage
 import contourpy as _contourpy
 
 def stack_scalar_fields(data_dict, prefix="scalar_field_values_"):
@@ -85,6 +86,8 @@ def iso_curves_for_slice_2d(slice_2d, level, X, Y):
 
     cg = _contourpy.contour_generator(x=x, y=y, z=np.asarray(slice_2d), name="serial")
     return [np.asarray(line, dtype=float) for line in cg.lines(level)]
+
+
 
 def get_profile_mask(field_2d, iso_level=0.0):
     """
@@ -284,3 +287,123 @@ def generate_bracing_keyfield_blend(profile_fields_2d, iso_level, nx, ny, keys_c
         bracing_fields[i] = field.ravel()
 
     return bracing_fields
+
+def _binary_dilate(mask, radius):
+    if radius < 0.5: return mask
+    h, w = mask.shape
+    r_int = int(radius)
+    out = np.copy(mask)
+    for dy in range(-r_int, r_int + 1):
+        for dx in range(-r_int, r_int + 1):
+            if dy*dy + dx*dx <= radius*radius:
+                if dy == 0 and dx == 0: continue
+                # Shift mask using slicing for speed in pure numpy
+                shifted = np.zeros_like(mask)
+                y_start = max(0, dy); y_end = min(h, h + dy)
+                x_start = max(0, dx); x_end = min(w, w + dx)
+                y_o_start = max(0, -dy); y_o_end = min(h, h - dy)
+                x_o_start = max(0, -dx); x_o_end = min(w, w - dx)
+                shifted[y_start:y_end, x_start:x_end] = mask[y_o_start:y_o_end, x_o_start:x_o_end]
+                out |= shifted
+    return out
+
+def _binary_erode(mask, radius):
+    if radius < 0.5: return mask
+    # Erosion is the dual of dilation: erode(M) = ~dilate(~M)
+    return ~_binary_dilate(~mask, radius)
+
+def _label_components(mask):
+    """Simple BFS-based labeling in pure python/numpy."""
+    h, w = mask.shape
+    labels = np.zeros((h, w), dtype=np.int32)
+    label_count = 0
+    # Use 1D indices for faster stack operations
+    flat_mask = mask.ravel()
+    flat_labels = labels.ravel()
+    
+    for i in range(h * w):
+        if flat_mask[i] and flat_labels[i] == 0:
+            label_count += 1
+            stack = [i]
+            flat_labels[i] = label_count
+            while stack:
+                curr = stack.pop()
+                cy, cx = divmod(curr, w)
+                for dy, dx in [(0, 1), (0, -1), (1, 0), (-1, 0)]:
+                    ny, nx = cy + dy, cx + dx
+                    if 0 <= ny < h and 0 <= nx < w:
+                        ni = ny * w + nx
+                        if flat_mask[ni] and flat_labels[ni] == 0:
+                            flat_labels[ni] = label_count
+                            stack.append(ni)
+    return labels, label_count
+
+def postprocess_bracing_fields(bracing_fields_2d, profile_fields_2d, iso_profile, iso_brace=0.0, 
+                               close_radius=2, min_area=120, temporal_window=3, outside_value=-1e6):
+    """
+    Apply morphological cleaning and temporal smoothing to bracing fields.
+    
+    Steps:
+    1. Masking by profile.
+    2. Binarization.
+    3. Morphological closing (dilation -> erosion).
+    4. Small component removal.
+    5. Temporal majority vote.
+    6. Reconstruction of signed field.
+    """
+    num_fields, N = bracing_fields_2d.shape
+    _, nx, ny = infer_grid_from_scalar_fields(bracing_fields_2d)
+    
+    m_stack = np.zeros((num_fields, ny, nx), dtype=bool)
+    
+    # Per-slice processing
+    for i in range(num_fields):
+        brac_slice = bracing_fields_2d[i].reshape((ny, nx))
+        prof_slice = profile_fields_2d[i].reshape((ny, nx))
+        
+        # 1 & 2. Masking + Binarize
+        mask = prof_slice < iso_profile
+        M = (brac_slice >= iso_brace) & mask
+        
+        # 3. Morphological closing
+        if close_radius > 0:
+            M = _binary_dilate(M, close_radius)
+            M = _binary_erode(M, close_radius)
+            
+        # 4. Remove small connected components
+        if min_area > 0:
+            labels, count = _label_components(M)
+            if count > 0:
+                for lbl in range(1, count + 1):
+                    comp = (labels == lbl)
+                    if np.sum(comp) < min_area:
+                        M[comp] = False
+        
+        m_stack[i] = M
+
+    # 5. Temporal stabilization (majority vote)
+    if temporal_window > 1:
+        m_stable = np.copy(m_stack)
+        half = temporal_window // 2
+        for i in range(num_fields):
+            s = max(0, i - half)
+            e = min(num_fields, i + half + 1)
+            votes = np.sum(m_stack[s:e], axis=0)
+            threshold = (e - s) // 2 + 1
+            m_stable[i] = (votes >= threshold)
+        m_stack = m_stable
+
+    # 6. Reconstruct clean signed field
+    out_fields = np.zeros_like(bracing_fields_2d)
+    for i in range(num_fields):
+        M_stable = m_stack[i]
+        prof_slice = profile_fields_2d[i].reshape((ny, nx))
+        mask = prof_slice < iso_profile
+        
+        # Inside=0.5, Outside=-0.5
+        b_clean = M_stable.astype(float) - 0.5
+        # Set outside profile mask to outside_value
+        b_clean[~mask] = outside_value
+        out_fields[i] = b_clean.ravel()
+        
+    return out_fields
