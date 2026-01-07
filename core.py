@@ -3,8 +3,9 @@ from sklearn.cluster import KMeans
 from scipy.spatial import cKDTree
 import scipy.ndimage as ndimage
 import contourpy as _contourpy
+from typing import Dict, Tuple, List, Optional, Any
 
-def stack_scalar_fields(data_dict, prefix="scalar_field_values_"):
+def stack_scalar_fields(data_dict: Dict[str, Any], prefix: str = "scalar_field_values_") -> Tuple[np.ndarray, List[str]]:
     """
     Extract all scalar field keys from a JSON dict and stack them
     into a 2D NumPy array, sorted by their numeric index.
@@ -16,7 +17,7 @@ def stack_scalar_fields(data_dict, prefix="scalar_field_values_"):
     scalar_fields_2d = np.array([data_dict[key] for key in scalar_field_keys])
     return scalar_fields_2d, scalar_field_keys
 
-def meta_data_info(data_dict):
+def meta_data_info(data_dict: Dict[str, Any]) -> Tuple[Optional[float], Optional[int], Any, Any]:
     """
     Extract metadata information from the JSON dict.
     """
@@ -27,7 +28,7 @@ def meta_data_info(data_dict):
     total_height = data_dict.get("total_height", None)
     return iso_level, slice_count, bounds_max, bounds_min
 
-def infer_grid_from_scalar_fields(scalar_fields_2d):
+def infer_grid_from_scalar_fields(scalar_fields_2d: np.ndarray) -> Tuple[int, int, int]:
     """
     Infer (nx, ny) from scalar_fields_2d.shape[1] assuming a square grid.
     """
@@ -37,7 +38,7 @@ def infer_grid_from_scalar_fields(scalar_fields_2d):
         raise ValueError(f"Cannot infer square grid from {values_per_field} values.")
     return num_fields, n, n
 
-def compute_sf_operation(sf_A, sf_B, iso_level_A=0.0, iso_level_B=0.0, mode="difference", swap=False):
+def compute_sf_operation(sf_A: np.ndarray, sf_B: np.ndarray, iso_level_A: float = 0.0, iso_level_B: float = 0.0, mode: str = "difference", swap: bool = False) -> np.ndarray:
     """
     Compute an SDF boolean-like operation between two scalar fields.
     """
@@ -62,7 +63,7 @@ def compute_sf_operation(sf_A, sf_B, iso_level_A=0.0, iso_level_B=0.0, mode="dif
 
     return result
 
-def iso_curves_for_slice_2d(slice_2d, level, X, Y):
+def iso_curves_for_slice_2d(slice_2d: np.ndarray, level: float, X: np.ndarray, Y: np.ndarray) -> List[np.ndarray]:
     """
     Extract iso-curves from a 2D slice using a fast contour engine (contourpy).
 
@@ -89,13 +90,13 @@ def iso_curves_for_slice_2d(slice_2d, level, X, Y):
 
 
 
-def get_profile_mask(field_2d, iso_level=0.0):
+def get_profile_mask(field_2d: np.ndarray, iso_level: float = 0.0) -> np.ndarray:
     """
     Returns a boolean mask where the field is inside the profile (value < iso_level).
     """
     return field_2d < iso_level
 
-def generate_centroids(mask, k=3, prev_centroids=None, seed=42):
+def generate_centroids(mask: np.ndarray, k: int = 3, prev_centroids: Optional[np.ndarray] = None, seed: int = 42) -> np.ndarray:
     """
     Generate k centroids for the given boolean mask using K-Means.
     """
@@ -115,7 +116,7 @@ def generate_centroids(mask, k=3, prev_centroids=None, seed=42):
     kmeans.fit(coords)
     return kmeans.cluster_centers_
 
-def compute_voronoi_sdf(shape, centroids):
+def compute_voronoi_sdf(shape: Tuple[int, int], centroids: np.ndarray) -> np.ndarray:
     """
     Compute a scalar field where value = dist_to_2nd_nearest - dist_to_nearest.
     """
@@ -127,7 +128,7 @@ def compute_voronoi_sdf(shape, centroids):
     sdf_flat = dists[:, 1] - dists[:, 0]
     return sdf_flat.reshape(shape)
 
-def constrain_centroids_to_mask(centroids, mask):
+def constrain_centroids_to_mask(centroids: np.ndarray, mask: np.ndarray) -> np.ndarray:
     """
     Ensure centroids are strictly inside the mask.
     """
@@ -150,6 +151,7 @@ def generate_bracing_static(profile_fields_2d, iso_level, nx, ny, k, seed=42):
     """
     Generate static bracing fields based on profile fields centroids.
     """
+    # Type hints omitted for simplicity in this implementation logic
     num_fields = profile_fields_2d.shape[0]
     bracing_fields = np.zeros_like(profile_fields_2d)
     prev_centroids = None
@@ -178,6 +180,7 @@ def generate_bracing_keyfield_blend(profile_fields_2d, iso_level, nx, ny, keys_c
     Uses Ridge Response R = exp(-(V/sigma)^2) blending instead of raw Voronoi V blending.
     Output is B = R - tau.
     """
+    # Type hints omitted for simplicity in this implementation logic
     # Sort keys by slice index
     sorted_keys = sorted(keys_config, key=lambda x: x[0])
     if not sorted_keys:
