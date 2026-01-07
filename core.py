@@ -167,88 +167,120 @@ def generate_bracing_static(profile_fields_2d, iso_level, nx, ny, k, seed=42):
             
     return bracing_fields
 
-def generate_bracing_key_blending(profile_fields_2d, iso_level, nx, ny, k, key_step=5, smooth=0.0, seed=42):
+def generate_bracing_keyfield_blend(profile_fields_2d, iso_level, nx, ny, keys_config, smooth=0.0, seed=42, sigma=5.0, tau=0.5, beta=4.0):
     """
-    Generate bracing fields using key-frame blending.
-    """
-    import itertools
+    Generate bracing fields by blending Voronoi fields between key slices.
+    keys_config: list of (slice_idx, k_centroids)
     
+    Uses Ridge Response R = exp(-(V/sigma)^2) blending instead of raw Voronoi V blending.
+    Output is B = R - tau.
+    """
+    # Sort keys by slice index
+    sorted_keys = sorted(keys_config, key=lambda x: x[0])
+    if not sorted_keys:
+        return np.zeros_like(profile_fields_2d)
+
     num_fields = profile_fields_2d.shape[0]
     bracing_fields = np.zeros_like(profile_fields_2d)
-    
-    # 1. Identify key slices
-    key_indices = list(range(0, num_fields, key_step))
-    if key_indices[-1] != num_fields - 1:
-        key_indices.append(num_fields - 1)
+
+    # Cache for key fields: map slice_idx -> 2D field
+    key_fields_cache = {}
+
+    def get_key_field(idx, k):
+        # Helper to compute normalized Ridge Response field
+        cache_key = (idx, k)
+        if cache_key in key_fields_cache:
+            return key_fields_cache[cache_key]
         
-    # 2. Generate centroids for key slices
-    key_centroids = {}
-    for idx in key_indices:
         slice_2d = profile_fields_2d[idx].reshape((ny, nx))
         mask = get_profile_mask(slice_2d, iso_level=iso_level)
-        # Independent K-Means for each key frame
         centroids = generate_centroids(mask, k=k, prev_centroids=None, seed=seed)
-        key_centroids[idx] = centroids
+        centroids = constrain_centroids_to_mask(centroids, mask)
+        
+        # 1. Raw Voronoi SDF (d2 - d1)
+        V = compute_voronoi_sdf((ny, nx), centroids)
+        
+        # 2. Convert to Ridge Response R
+        # V >= 0 usually. R in (0, 1]
+        R = np.exp(- (V / sigma)**2)
+        
+        # 3. Normalize R based on P95 inside mask
+        valid_vals = R[mask]
+        if valid_vals.size > 0:
+            p95 = np.percentile(valid_vals, 95)
+            if p95 > 1e-6:
+                R = R / p95
 
-    # 3. Match and Interpolate
-    for i in range(len(key_indices) - 1):
-        idx_start = key_indices[i]
-        idx_end = key_indices[i+1]
+        key_fields_cache[cache_key] = R
+        return R
+
+    # 1. Fill Before First Key
+    first_idx, first_k = sorted_keys[0]
+    if first_idx > 0:
+        R_first = get_key_field(first_idx, first_k)
+        # Convert R -> B
+        B_first = R_first - tau
         
-        c_start = key_centroids[idx_start]
-        c_end = key_centroids[idx_end]
+        # Masking
+        # We need to apply mask for each slice individually 
+        # because the profile shape might change (though often similar)
+        # Here we just iterate to fill
+        for i in range(first_idx):
+             slice_mask = get_profile_mask(profile_fields_2d[i].reshape((ny, nx)), iso_level=iso_level)
+             field = B_first.copy().ravel()
+             # Apply mask to flat array
+             field[~slice_mask.ravel()] = -10.0
+             bracing_fields[i] = field
+
+    # 2. Interpolate between keys
+    for i in range(len(sorted_keys) - 1):
+        idx_start, k_start = sorted_keys[i]
+        idx_end, k_end = sorted_keys[i+1]
         
-        # Match c_end to c_start using brute-force permutation (k is small)
-        best_perm = None
-        min_dist = float('inf')
+        R_start = get_key_field(idx_start, k_start)
+        R_end = get_key_field(idx_end, k_end)
         
-        perms = list(itertools.permutations(range(k)))
-        for perm in perms:
-            dist = 0
-            for j in range(k):
-                dist += np.linalg.norm(c_start[j] - c_end[perm[j]])
-            if dist < min_dist:
-                min_dist = dist
-                best_perm = perm
-                
-        c_end_ordered = c_end[list(best_perm)]
-        
-        # Update the stored key centroid for the next segment start
-        key_centroids[idx_end] = c_end_ordered
-        c_end = c_end_ordered
-        
-        # Interpolate
         steps = idx_end - idx_start
         for j in range(steps):
             curr_idx = idx_start + j
             t = j / float(steps)
-            
+
             # Apply smoothing to t (Linear -> Smoothstep)
             if smooth > 0:
                 t_smooth = t * t * (3 - 2 * t)
                 t = (1 - smooth) * t + smooth * t_smooth
             
-            # Interpolation
-            c_curr = (1 - t) * c_start + t * c_end
+            # Field Blending
+            if beta > 0.0:
+                # Smooth Max Blending: (1/beta) * log((1-t)*exp(beta*R1) + t*exp(beta*R2))
+                # To avoid overflow, use logaddexp logic indirectly or just clip beta*R if needed
+                # Since R is in [0, 1], beta*R is comfortably within range for reasonable beta (<100)
+                R_curr = (1.0 / beta) * np.log((1-t) * np.exp(beta * R_start) + t * np.exp(beta * R_end))
+            else:
+                # Linear Blend (Lerp)
+                R_curr = (1.0 - t) * R_start + t * R_end
             
-            # Constrain to mask
-            slice_2d = profile_fields_2d[curr_idx].reshape((ny, nx))
-            mask = get_profile_mask(slice_2d, iso_level=iso_level)
-            c_curr = constrain_centroids_to_mask(c_curr, mask)
+            # Reconstruction B = R - tau
+            B_curr = R_curr - tau
             
-            # Compute SDF
-            voronoi_sdf_flat = compute_voronoi_sdf((ny, nx), c_curr)
-            bracing_fields[curr_idx] = voronoi_sdf_flat.ravel()
+            # Masking for current slice
+            slice_mask = get_profile_mask(profile_fields_2d[curr_idx].reshape((ny, nx)), iso_level=iso_level)
+            B_curr[~slice_mask] = -10.0
+            
+            bracing_fields[curr_idx] = B_curr.ravel()
             
             if curr_idx % 10 == 0:
-                print(f"Generated bracing for slice {curr_idx}/{num_fields}")
+                print(f"Generated bracing (blend) for slice {curr_idx}/{num_fields}")
 
-    # Handle the very last frame
-    last_idx = key_indices[-1]
-    slice_2d = profile_fields_2d[last_idx].reshape((ny, nx))
-    mask = get_profile_mask(slice_2d, iso_level=iso_level)
-    c_last = constrain_centroids_to_mask(key_centroids[last_idx], mask)
-    voronoi_sdf_flat = compute_voronoi_sdf((ny, nx), c_last)
-    bracing_fields[last_idx] = voronoi_sdf_flat.ravel()
+    # 3. Fill After Last Key
+    last_idx, last_k = sorted_keys[-1]
+    R_last = get_key_field(last_idx, last_k)
+    B_last = R_last - tau
     
+    for i in range(last_idx, num_fields):
+        slice_mask = get_profile_mask(profile_fields_2d[i].reshape((ny, nx)), iso_level=iso_level)
+        field = B_last.copy()
+        field[~slice_mask] = -10.0
+        bracing_fields[i] = field.ravel()
+
     return bracing_fields
