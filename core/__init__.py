@@ -60,28 +60,35 @@ from .mesh_generator import (
     export_mesh_obj,
 )
 
-# SDF operations API
-from .sdf_operations import (
-    # Data loading and grid utilities
+# Data loading and grid utilities
+from .data_utils import (
     stack_scalar_fields,
     meta_data_info,
     infer_grid_from_scalar_fields,
-    
-    # Boolean operations and masking
+)
+
+# SDF operations
+from .sdf_operations import (
     compute_sf_operation,
-    get_profile_mask,
-    
-    # Curve extraction
+)
+
+# Curve extraction
+from .curves import (
     iso_curves_for_slice_2d,
-    
-    # Bracing generation
+)
+
+# Bracing generation
+from .bracing_generator import (
     generate_bracing_static,
     generate_bracing_keyfield_blend,
     compute_voronoi_sdf,
     generate_centroids,
     constrain_centroids_to_mask,
-    
-    # Post-processing
+    get_profile_mask,
+)
+
+# Post-processing
+from .postprocess import (
     postprocess_bracing_fields,
 )
 

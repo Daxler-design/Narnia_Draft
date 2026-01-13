@@ -39,65 +39,53 @@ def build_mesh_from_fields(
     Returns:
         Open3D TriangleMesh or None if generation fails
     """
-    try:
-        if fields is None or fields.shape[0] < 2:
-            print(f"[mesh_builders] Fields validation failed: fields={'None' if fields is None else f'shape {fields.shape}'}")
-            return None
-        
-        # Override Z bounds with total_height
-        bounds_min_3d = np.array([bounds_min[0], bounds_min[1], 0.0])
-        bounds_max_3d = np.array([bounds_max[0], bounds_max[1], total_height])
-        
-        # Reconstruct 3D volume from 2D slices
-        grid_data = core.reconstruct_3d_volume(fields, nx, ny, bounds_min_3d, bounds_max_3d)
-        if grid_data is None:
-            print(f"[mesh_builders] reconstruct_3d_volume returned None")
-            return None
-        
-        volume = grid_data["volume"]
-        
-        # Apply Z-axis interpolation if requested
-        if z_interp_steps > 0:
-            volume = core.interpolate_slices(volume, z_interp_steps)
-            # Recalculate spacing after interpolation
-            nz_new = volume.shape[0]
-            dz_new = total_height / (nz_new - 1) if nz_new > 1 else grid_data["spacing"][0]
-            grid_data["spacing"] = (dz_new, grid_data["spacing"][1], grid_data["spacing"][2])
-        
-        # Run marching cubes
-        result = core.generate_mesh_marching_cubes(
-            volume,
-            grid_data["spacing"],
-            grid_data["origin"],
-            iso_level
-        )
-        
-        if result is None:
-            print(f"[mesh_builders] generate_mesh_marching_cubes returned None (iso_level={iso_level})")
-            return None
-        
-        verts, faces = result
-        
-        if len(verts) == 0 or len(faces) == 0:
-            print(f"[mesh_builders] Empty mesh: {len(verts)} verts, {len(faces)} faces")
-            return None
-        
-        # Create Open3D mesh
-        mesh = o3d.geometry.TriangleMesh()
-        mesh.vertices = o3d.utility.Vector3dVector(verts)
-        mesh.triangles = o3d.utility.Vector3iVector(faces)
-        
-        # Apply smoothing using core.smooth_mesh
-        mesh = core.smooth_mesh(mesh, method=smooth_method, iterations=smooth_iterations)
-        
-        print(f"[mesh_builders] Successfully generated mesh: {len(mesh.vertices)} verts, {len(mesh.triangles)} faces")
-        return mesh
-    
-    except Exception as e:
-        print(f"[mesh_builders] Exception during mesh generation: {e}")
-        import traceback
-        traceback.print_exc()
+    if fields is None or fields.shape[0] < 2:
         return None
+    
+    # Override Z bounds with total_height
+    bounds_min_3d = np.array([bounds_min[0], bounds_min[1], 0.0])
+    bounds_max_3d = np.array([bounds_max[0], bounds_max[1], total_height])
+    
+    # Reconstruct 3D volume from 2D slices
+    grid_data = core.reconstruct_3d_volume(fields, nx, ny, bounds_min_3d, bounds_max_3d)
+    if grid_data is None:
+        return None
+    
+    volume = grid_data["volume"]
+    
+    # Apply Z-axis interpolation if requested
+    if z_interp_steps > 0:
+        volume = core.interpolate_slices(volume, z_interp_steps)
+        # Recalculate spacing after interpolation
+        nz_new = volume.shape[0]
+        dz_new = total_height / (nz_new - 1) if nz_new > 1 else grid_data["spacing"][0]
+        grid_data["spacing"] = (dz_new, grid_data["spacing"][1], grid_data["spacing"][2])
+    
+    # Run marching cubes
+    result = core.generate_mesh_marching_cubes(
+        volume,
+        grid_data["spacing"],
+        grid_data["origin"],
+        iso_level
+    )
+    
+    if result is None:
+        return None
+    
+    verts, faces = result
+    
+    if len(verts) == 0 or len(faces) == 0:
+        return None
+    
+    # Create Open3D mesh
+    mesh = o3d.geometry.TriangleMesh()
+    mesh.vertices = o3d.utility.Vector3dVector(verts)
+    mesh.triangles = o3d.utility.Vector3iVector(faces)
+    
+    # Apply smoothing using core.smooth_mesh
+    mesh = core.smooth_mesh(mesh, method=smooth_method, iterations=smooth_iterations)
+    
+    return mesh
 
 
 def apply_mesh_geometries(scene_widget, result_mesh, profile_mesh, bracing_mesh):
