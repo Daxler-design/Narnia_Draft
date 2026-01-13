@@ -9,7 +9,6 @@ from open3d.visualization import gui
 from open3d.visualization import rendering
 
 import core
-import core
 import vis_utils as vut
 from gui import widgets as vwg
 from gui import mesh_builders as mesh_build
