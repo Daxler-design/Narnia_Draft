@@ -256,38 +256,54 @@ class NarniaCurveViewer:
 
         self._mesh_panel.add_child(gui.Label("Include"))
         h_mesh_opts = gui.Horiz(10)
+        self._mesh_chk_result = gui.Checkbox("Result Mesh")
+        self._mesh_chk_result.checked = False
         self._mesh_chk_profile = gui.Checkbox("Profile Mesh")
         self._mesh_chk_profile.checked = True
         self._mesh_chk_bracing = gui.Checkbox("Bracing Mesh")
         self._mesh_chk_bracing.checked = True
+        h_mesh_opts.add_child(self._mesh_chk_result)
         h_mesh_opts.add_child(self._mesh_chk_profile)
         h_mesh_opts.add_child(self._mesh_chk_bracing)
         self._mesh_panel.add_child(h_mesh_opts)
         self._mesh_panel.add_fixed(10)
 
-        row_m_slice, self._mesh_slice_slider, self._mesh_slice_edit = vwg.create_slider_row(
-            "Slice Step", 1, 20, 1, None, is_int=True
+        # Marching Cubes Parameters
+        self._mesh_panel.add_child(gui.Label("--- Marching Cubes Parameters ---"))
+        
+        row_m_interp, self._mesh_interp_slider, self._mesh_interp_edit = vwg.create_slider_row(
+            "Z Interpolation", 0, 5, 2, None, is_int=True
         )
-        row_m_point, self._mesh_point_slider, self._mesh_point_edit = vwg.create_slider_row(
-            "Point Step", 1, 10, 1, None, is_int=True
+        row_m_iso, self._mesh_iso_slider, self._mesh_iso_edit = vwg.create_slider_row(
+            "Iso Override", -2.0, 2.0, 0.0, None
         )
-        row_m_alpha, self._mesh_alpha_slider, self._mesh_alpha_edit = vwg.create_slider_row(
-            "Alpha Scale", 0.5, 10.0, 2.0, None
+        
+        self._mesh_panel.add_child(row_m_interp)
+        self._mesh_panel.add_child(row_m_iso)
+        self._mesh_panel.add_fixed(10)
+        
+        # Smoothing Parameters
+        self._mesh_panel.add_child(gui.Label("--- Smoothing ---"))
+        
+        row_m_lap, self._mesh_laplacian_slider, self._mesh_laplacian_edit = vwg.create_slider_row(
+            "Laplacian Iterations", 0, 10, 2, None, is_int=True
         )
-        row_m_smooth, self._mesh_smooth_slider, self._mesh_smooth_edit = vwg.create_slider_row(
-            "Smooth Iterations", 0, 20, 0, None, is_int=True
+        row_m_tau, self._mesh_taubin_slider, self._mesh_taubin_edit = vwg.create_slider_row(
+            "Taubin Iterations", 0, 10, 0, None, is_int=True
         )
-
-        self._mesh_panel.add_child(row_m_slice)
-        self._mesh_panel.add_child(row_m_point)
-        self._mesh_panel.add_child(row_m_alpha)
-        self._mesh_panel.add_child(row_m_smooth)
+        
+        self._mesh_panel.add_child(row_m_lap)
+        self._mesh_panel.add_child(row_m_tau)
         self._mesh_panel.add_fixed(10)
 
-        self._btn_generate_mesh = gui.Button("Generate Mesh")
+        self._btn_generate_mesh = gui.Button("Update Mesh")
         self._mesh_panel.add_child(self._btn_generate_mesh)
+        self._mesh_panel.add_fixed(6)
+        
+        self._btn_export_mesh = gui.Button("Export Mesh (.obj)")
+        self._mesh_panel.add_child(self._btn_export_mesh)
         self._mesh_panel.add_fixed(10)
-        self._mesh_panel.add_child(gui.Label("Note: Uses stacked slice contours."))
+        self._mesh_panel.add_child(gui.Label("Note: Uses marching cubes."))
 
         self._tabs.add_tab("Mesh", self._mesh_panel)
         self._mesh_tab_index = 2
@@ -353,6 +369,7 @@ class NarniaCurveViewer:
         # self._btn_select_npz is now handled in _create_file_input_row callback
         self._btn_load_npz.set_on_clicked(self._on_load_npz)
         self._btn_generate_mesh.set_on_clicked(self._on_generate_mesh)
+        self._btn_export_mesh.set_on_clicked(self._on_export_mesh)
         self._slice_slider.set_on_value_changed(self._on_slice_changed)
         self._tabs.set_on_selected_tab_changed(self._on_tab_changed)
 
@@ -368,6 +385,7 @@ class NarniaCurveViewer:
         self._bracing_geom: Optional[o3d.geometry.LineSet] = None
         self._overlay_geom: Optional[o3d.geometry.Geometry] = None
         self._current_bbox: Optional[o3d.geometry.AxisAlignedBoundingBox] = None
+        self._result_mesh: Optional[o3d.geometry.TriangleMesh] = None
         self._profile_mesh: Optional[o3d.geometry.TriangleMesh] = None
         self._bracing_mesh: Optional[o3d.geometry.TriangleMesh] = None
 
@@ -426,6 +444,13 @@ class NarniaCurveViewer:
         self._bracing_path.enabled = not checked
         self._gen_options_container.visible = checked
         self._window.set_needs_layout()
+    
+    def _invalidate_mesh_cache(self, state: vut.ViewState):
+        """Clear mesh cache when parameters change."""
+        state.profile_mesh_cache = None
+        state.bracing_mesh_cache = None
+        state.result_mesh_cache = None
+        state.mesh_params_cache = None
 
     def _on_boolean_param_changed(self, *args):
         if self.compute_state.profile is None or self.compute_state.bracing is None:
@@ -433,14 +458,20 @@ class NarniaCurveViewer:
         # If user is tweaking compute params, ensure we are on the compute tab
         if self._tabs.selected_tab_index != 0:
             self._tabs.selected_tab_index = 0
-            
+        
+        # Invalidate mesh cache when boolean params change
+        self._invalidate_mesh_cache(self.compute_state)
+        
         self._update_boolean_result()
         self._update_scene(fit_camera=False)
 
     def _on_postprocess_param_changed(self, *args):
         if self.compute_state.bracing is None or self.compute_state.profile is None:
             return
-            
+        
+        # Invalidate mesh cache when postprocess params change
+        self._invalidate_mesh_cache(self.compute_state)
+        
         if self._chk_enable_postprocess.checked:
             state = self.compute_state
             # Re-run cleaning logic on current raw bracing
@@ -526,6 +557,10 @@ class NarniaCurveViewer:
         try:
             self._tabs.selected_tab_index = 0
             self._compute_from_paths(self._bracing_path.text_value, self._profile_path.text_value)
+            
+            # Invalidate mesh cache after recomputing
+            self._invalidate_mesh_cache(self.compute_state)
+            
             self._status.text = "Computed. Use slice/iso controls."
             self._update_scene(fit_camera=True)
             self._mesh_source_combo.selected_index = 0
@@ -702,11 +737,15 @@ class NarniaCurveViewer:
 
             iso_level = float(slider.double_value)
             
+            # Calculate total height from bounds
+            total_height = float(bmax[2] - bmin[2]) if bmax is not None and bmin is not None else 10.0
+            
             save_dict = {
                 "result_fields": res,
                 "iso_level": iso_level,
                 "bounds_min": bmin,
                 "bounds_max": bmax,
+                "total_height": total_height,
             }
             
             # Add optional fields if requested
@@ -1001,11 +1040,12 @@ class NarniaCurveViewer:
         self._overlay_geom = None
 
     def _clear_mesh_geometries(self):
-        for name in ["profile_mesh", "bracing_mesh"]:
+        for name in ["result_mesh", "profile_mesh", "bracing_mesh"]:
             try:
                 self._scene_widget.scene.remove_geometry(name)
             except Exception:
                 pass
+        self._result_mesh = None
         self._profile_mesh = None
         self._bracing_mesh = None
 
@@ -1081,45 +1121,6 @@ class NarniaCurveViewer:
         state.grid = (nx, ny, X, Y)
         return state.grid
 
-    def _point_cloud_from_fields(
-        self,
-        fields,
-        iso_level,
-        bounds_min,
-        bounds_max,
-        nx,
-        ny,
-        X,
-        Y,
-        slice_step,
-        point_step,
-    ):
-        num_fields = fields.shape[0]
-        points = []
-        for idx in range(0, num_fields, slice_step):
-            slice_2d = fields[idx].reshape((ny, nx))
-            curves = core.iso_curves_for_slice_2d(slice_2d, iso_level, X, Y)
-            if not curves:
-                continue
-            z = vut.slice_z(idx, num_fields, bounds_min, bounds_max)
-            for curve in curves:
-                if curve.shape[0] < 3:
-                    continue
-                if point_step > 1:
-                    curve = curve[::point_step]
-                if curve.shape[0] < 3:
-                    continue
-                pts3 = np.column_stack([curve[:, 0], curve[:, 1], np.full(curve.shape[0], z)])
-                points.append(pts3)
-
-        if not points:
-            return None
-
-        pts = np.vstack(points)
-        pcd = o3d.geometry.PointCloud()
-        pcd.points = o3d.utility.Vector3dVector(pts)
-        return pcd
-
     def _build_mesh_from_fields(
         self,
         fields,
@@ -1128,54 +1129,102 @@ class NarniaCurveViewer:
         bounds_max,
         nx,
         ny,
-        X,
-        Y,
-        slice_step,
-        point_step,
-        alpha_scale,
-        smooth_iters,
+        z_interp_steps,
+        laplacian_iters,
+        taubin_iters,
     ):
-        pcd = self._point_cloud_from_fields(
-            fields,
-            iso_level,
-            bounds_min,
-            bounds_max,
-            nx,
-            ny,
-            X,
-            Y,
-            slice_step,
-            point_step,
+        """
+        Generate mesh using marching cubes algorithm.
+        
+        Args:
+            fields: 2D array (num_slices, nx*ny) of scalar field values
+            iso_level: iso-surface threshold
+            bounds_min, bounds_max: spatial bounds
+            nx, ny: grid dimensions
+            z_interp_steps: number of interpolation steps between slices
+            laplacian_iters: Laplacian smoothing iterations
+            taubin_iters: Taubin smoothing iterations
+        
+        Returns:
+            Open3D TriangleMesh or None
+        """
+        if fields is None or fields.shape[0] < 2:
+            return None
+        
+        # Reconstruct 3D volume from 2D slices
+        grid_data = vut.reconstruct_3d_grid(fields, nx, ny, bounds_min, bounds_max)
+        if grid_data is None:
+            return None
+        
+        volume = grid_data["volume"]
+        
+        # Apply Z-axis interpolation if requested
+        if z_interp_steps > 0:
+            volume = vut.interpolate_slices(volume, z_interp_steps)
+            # Recalculate spacing after interpolation
+            nz_new = volume.shape[0]
+            total_height = float(bounds_max[2] - bounds_min[2])
+            dz_new = total_height / (nz_new - 1) if nz_new > 1 else grid_data["spacing"][0]
+            grid_data["spacing"] = (dz_new, grid_data["spacing"][1], grid_data["spacing"][2])
+        
+        # Run marching cubes
+        result = vut.generate_mesh_marching_cubes(
+            volume,
+            grid_data["spacing"],
+            grid_data["origin"],
+            iso_level
         )
-        if pcd is None:
+        
+        if result is None:
             return None
-
-        x_vec = X[0, :] if np.asarray(X).ndim == 2 else np.asarray(X)
-        y_vec = Y[:, 0] if np.asarray(Y).ndim == 2 else np.asarray(Y)
-        dx = float(abs(x_vec[1] - x_vec[0])) if x_vec.shape[0] > 1 else 1.0
-        dy = float(abs(y_vec[1] - y_vec[0])) if y_vec.shape[0] > 1 else 1.0
-        dz = float(abs(bounds_max[2] - bounds_min[2])) / max(1, fields.shape[0] - 1)
-        alpha = float(alpha_scale) * max(dx, dy, dz)
-
-        mesh = o3d.geometry.TriangleMesh.create_from_point_cloud_alpha_shape(pcd, alpha)
-        if mesh is None or len(mesh.vertices) == 0:
+        
+        verts, faces = result
+        
+        if len(verts) == 0 or len(faces) == 0:
             return None
-
+        
+        # Create Open3D mesh
+        mesh = o3d.geometry.TriangleMesh()
+        mesh.vertices = o3d.utility.Vector3dVector(verts)
+        mesh.triangles = o3d.utility.Vector3iVector(faces)
+        
+        # Cleanup
         mesh.remove_duplicated_vertices()
         mesh.remove_duplicated_triangles()
         mesh.remove_degenerate_triangles()
         mesh.remove_non_manifold_edges()
-        if smooth_iters > 0:
-            mesh = mesh.filter_smooth_simple(number_of_iterations=int(smooth_iters))
+        
+        # Apply smoothing
+        if laplacian_iters > 0:
+            mesh = mesh.filter_smooth_simple(number_of_iterations=int(laplacian_iters))
+        
+        if taubin_iters > 0:
+            mesh = mesh.filter_smooth_taubin(number_of_iterations=int(taubin_iters))
+        
         mesh.compute_vertex_normals()
         return mesh
 
-    def _apply_mesh_geometries(self, profile_mesh, bracing_mesh, fit_camera: bool):
+    def _apply_mesh_geometries(self, result_mesh, profile_mesh, bracing_mesh, fit_camera: bool):
+        """Apply mesh geometries to the scene with proper materials."""
         self._clear_curve_geometries()
         self._clear_mesh_geometries()
         self._current_bbox = None
 
         bbox = None
+        
+        # Result mesh (typically the boolean operation result)
+        if result_mesh is not None:
+            self._result_mesh = result_mesh
+            r_mat = rendering.MaterialRecord()
+            r_mat.shader = "defaultLit"
+            r_mat.base_color = [0.9, 0.9, 0.9, 1.0]
+            self._scene_widget.scene.add_geometry("result_mesh", result_mesh, r_mat)
+            try:
+                bbox = result_mesh.get_axis_aligned_bounding_box()
+            except Exception:
+                bbox = None
+        
+        # Profile mesh
         if profile_mesh is not None:
             self._profile_mesh = profile_mesh
             p_mat = rendering.MaterialRecord()
@@ -1183,10 +1232,17 @@ class NarniaCurveViewer:
             p_mat.base_color = [0.8, 0.8, 0.8, 1.0]
             self._scene_widget.scene.add_geometry("profile_mesh", profile_mesh, p_mat)
             try:
-                bbox = profile_mesh.get_axis_aligned_bounding_box()
+                pb = profile_mesh.get_axis_aligned_bounding_box()
+                if bbox is None:
+                    bbox = pb
+                else:
+                    min_b = np.minimum(bbox.min_bound, pb.min_bound)
+                    max_b = np.maximum(bbox.max_bound, pb.max_bound)
+                    bbox = o3d.geometry.AxisAlignedBoundingBox(min_b, max_b)
             except Exception:
-                bbox = None
+                pass
 
+        # Bracing mesh
         if bracing_mesh is not None:
             self._bracing_mesh = bracing_mesh
             b_mat = rendering.MaterialRecord()
@@ -1209,102 +1265,225 @@ class NarniaCurveViewer:
             self._fit_camera_to_current()
 
     def _on_generate_mesh(self):
-        source = self._mesh_source_combo.get_item(self._mesh_source_combo.selected_index)
-        state = self.compute_state if source == "Compute" else self.viewer_state
+        """Generate mesh using marching cubes with caching support."""
+        # Run heavy computation in background to avoid freezing UI
+        self._status.text = "Generating mesh (this may take a moment)..."
+        self._window.set_needs_layout()
+        
+        # Disable button during generation
+        self._btn_generate_mesh.enabled = False
+        
+        def compute_meshes():
+            """Background thread computation."""
+            source = self._mesh_source_combo.get_item(self._mesh_source_combo.selected_index)
+            state = self.compute_state if source == "Compute" else self.viewer_state
 
-        if state.bounds_min is None or state.bounds_max is None:
-            self._status.text = f"No bounds available for {source} data."
+            if state.bounds_min is None or state.bounds_max is None:
+                return None, f"No bounds available for {source} data."
+
+            if state.result is None and state.profile is None and state.bracing is None:
+                return None, f"No {source} data loaded."
+
+            grid = self._ensure_state_grid(state)
+            if grid is None:
+                return None, f"Missing grid data for {source}."
+
+            nx, ny, X, Y = grid
+            
+            # Get mesh parameters
+            z_interp = int(self._mesh_interp_slider.int_value)
+            iso_override = float(self._mesh_iso_slider.double_value)
+            laplacian_iters = int(self._mesh_laplacian_slider.int_value)
+            taubin_iters = int(self._mesh_taubin_slider.int_value)
+            
+            # Build parameter hash for cache checking
+            params = {
+                "z_interp": z_interp,
+                "iso_override": iso_override,
+                "laplacian": laplacian_iters,
+                "taubin": taubin_iters,
+            }
+            
+            # Check if we can use cached meshes
+            use_cache = (state.mesh_params_cache == params)
+            
+            iso_p = state.iso_p_base + iso_override
+            iso_b = state.iso_b_base + iso_override
+            if source == "Compute":
+                iso_p += self._profile_offset_slider.double_value
+                iso_b += self._bracing_offset_slider.double_value
+
+            result_mesh = None
+            profile_mesh = None
+            bracing_mesh = None
+            details = []
+
+            # Generate Result Mesh
+            if self._mesh_chk_result.checked:
+                if state.result is None:
+                    details.append("result: missing")
+                elif use_cache and state.result_mesh_cache is not None:
+                    result_mesh = state.result_mesh_cache
+                    details.append("result: cached")
+                else:
+                    try:
+                        result_mesh = self._build_mesh_from_fields(
+                            state.result,
+                            iso_p,
+                            state.bounds_min,
+                            state.bounds_max,
+                            nx,
+                            ny,
+                            z_interp,
+                            laplacian_iters,
+                            taubin_iters,
+                        )
+                        state.result_mesh_cache = result_mesh
+                        if result_mesh:
+                            details.append(f"result: {len(result_mesh.vertices)} verts")
+                    except Exception as e:
+                        details.append(f"result: {e}")
+
+            # Generate Profile Mesh
+            if self._mesh_chk_profile.checked:
+                if state.profile is None:
+                    details.append("profile: missing")
+                elif use_cache and state.profile_mesh_cache is not None:
+                    profile_mesh = state.profile_mesh_cache
+                    details.append("profile: cached")
+                else:
+                    try:
+                        profile_mesh = self._build_mesh_from_fields(
+                            state.profile,
+                            iso_p,
+                            state.bounds_min,
+                            state.bounds_max,
+                            nx,
+                            ny,
+                            z_interp,
+                            laplacian_iters,
+                            taubin_iters,
+                        )
+                        state.profile_mesh_cache = profile_mesh
+                        if profile_mesh:
+                            details.append(f"profile: {len(profile_mesh.vertices)} verts")
+                    except Exception as e:
+                        details.append(f"profile: {e}")
+
+            # Generate Bracing Mesh
+            if self._mesh_chk_bracing.checked:
+                bracing_fields = state.bracing_clean if state.bracing_clean is not None else state.bracing
+                if bracing_fields is None:
+                    details.append("bracing: missing")
+                elif use_cache and state.bracing_mesh_cache is not None:
+                    bracing_mesh = state.bracing_mesh_cache
+                    details.append("bracing: cached")
+                else:
+                    try:
+                        bracing_mesh = self._build_mesh_from_fields(
+                            bracing_fields,
+                            iso_b,
+                            state.bounds_min,
+                            state.bounds_max,
+                            nx,
+                            ny,
+                            z_interp,
+                            laplacian_iters,
+                            taubin_iters,
+                        )
+                        state.bracing_mesh_cache = bracing_mesh
+                        if bracing_mesh:
+                            details.append(f"bracing: {len(bracing_mesh.vertices)} verts")
+                    except Exception as e:
+                        details.append(f"bracing: {e}")
+
+            # Update cache params
+            state.mesh_params_cache = params
+
+            return (result_mesh, profile_mesh, bracing_mesh, details), None
+        
+        def on_done(result_tuple):
+            """Main thread callback after background computation."""
+            self._btn_generate_mesh.enabled = True
+            
+            if result_tuple is None or len(result_tuple) != 2:
+                self._status.text = "Mesh generation failed unexpectedly."
+                return
+            
+            result, error = result_tuple
+            
+            if error:
+                self._status.text = error
+                return
+            
+            result_mesh, profile_mesh, bracing_mesh, details = result
+            
+            if result_mesh is None and profile_mesh is None and bracing_mesh is None:
+                self._clear_mesh_geometries()
+                if details:
+                    self._status.text = "Mesh generation: " + "; ".join(details)
+                else:
+                    self._status.text = "Mesh generation produced no geometry."
+                return
+
+            self._apply_mesh_geometries(result_mesh, profile_mesh, bracing_mesh, fit_camera=True)
+            self._status.text = "Mesh generated: " + " | ".join(details)
+        
+        # Run in background thread
+        import threading
+        def run_and_post():
+            result = compute_meshes()
+            gui.Application.instance.post_to_main_thread(self._window, lambda: on_done(result))
+        
+        thread = threading.Thread(target=run_and_post, daemon=True)
+        thread.start()
+    
+    def _on_export_mesh(self):
+        """Export generated meshes to OBJ files."""
+        output_dir = Path(self._output_dir.text_value)
+        if not output_dir.exists():
+            try:
+                output_dir.mkdir(parents=True, exist_ok=True)
+            except Exception as e:
+                self._status.text = f"Cannot create output dir: {e}"
+                return
+        
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        exported = []
+        errors = []
+        
+        def save_mesh_obj(mesh, name):
+            if mesh is None or len(mesh.vertices) == 0:
+                return
+            filename = output_dir / f"{name}_mesh_{timestamp}.obj"
+            try:
+                verts = np.asarray(mesh.vertices)
+                faces = np.asarray(mesh.triangles)
+                with open(filename, "w") as f:
+                    f.write(f"# Narnia {name.title()} Mesh\n")
+                    for v in verts:
+                        f.write(f"v {v[0]:.6f} {v[1]:.6f} {v[2]:.6f}\n")
+                    for face in faces:
+                        f.write(f"f {face[0]+1} {face[1]+1} {face[2]+1}\n")
+                exported.append(f"{name}: {filename.name}")
+            except Exception as e:
+                errors.append(f"{name}: {e}")
+        
+        # Export each mesh that exists
+        save_mesh_obj(self._result_mesh, "result")
+        save_mesh_obj(self._profile_mesh, "profile")
+        save_mesh_obj(self._bracing_mesh, "bracing")
+        
+        if not exported and not errors:
+            self._status.text = "No meshes to export. Generate meshes first."
             return
-
-        if state.result is None and state.profile is None and state.bracing is None:
-            self._status.text = f"No {source} data loaded."
-            return
-
-        grid = self._ensure_state_grid(state)
-        if grid is None:
-            self._status.text = f"Missing grid data for {source}."
-            return
-
-        nx, ny, X, Y = grid
-        slice_step = max(1, int(self._mesh_slice_slider.int_value))
-        point_step = max(1, int(self._mesh_point_slider.int_value))
-        alpha_scale = float(self._mesh_alpha_slider.double_value)
-        smooth_iters = int(self._mesh_smooth_slider.int_value)
-
-        iso_p = state.iso_p_base
-        iso_b = state.iso_b_base
-        if source == "Compute":
-            iso_p += self._profile_offset_slider.double_value
-            iso_b += self._bracing_offset_slider.double_value
-
-        profile_mesh = None
-        bracing_mesh = None
-        details = []
-
-        if self._mesh_chk_profile.checked:
-            if state.profile is None:
-                details.append("profile: missing")
-            else:
-                try:
-                    profile_mesh = self._build_mesh_from_fields(
-                        state.profile,
-                        iso_p,
-                        state.bounds_min,
-                        state.bounds_max,
-                        nx,
-                        ny,
-                        X,
-                        Y,
-                        slice_step,
-                        point_step,
-                        alpha_scale,
-                        smooth_iters,
-                    )
-                except Exception as e:
-                    details.append(f"profile: {e}")
-
-        if self._mesh_chk_bracing.checked:
-            bracing_fields = state.bracing_clean if state.bracing_clean is not None else state.bracing
-            if bracing_fields is None:
-                details.append("bracing: missing")
-            else:
-                try:
-                    bracing_mesh = self._build_mesh_from_fields(
-                        bracing_fields,
-                        iso_b,
-                        state.bounds_min,
-                        state.bounds_max,
-                        nx,
-                        ny,
-                        X,
-                        Y,
-                        slice_step,
-                        point_step,
-                        alpha_scale,
-                        smooth_iters,
-                    )
-                except Exception as e:
-                    details.append(f"bracing: {e}")
-
-        if profile_mesh is None and bracing_mesh is None:
-            self._clear_mesh_geometries()
-            if details:
-                self._status.text = "Mesh generation failed: " + "; ".join(details)
-            else:
-                self._status.text = "Mesh generation produced no geometry."
-            return
-
-        self._apply_mesh_geometries(profile_mesh, bracing_mesh, fit_camera=True)
-
-        parts = []
-        if profile_mesh is not None:
-            parts.append(f"profile {len(profile_mesh.vertices)} verts")
-        if bracing_mesh is not None:
-            parts.append(f"bracing {len(bracing_mesh.vertices)} verts")
-        msg = "Mesh generated: " + ", ".join(parts)
-        if details:
-            msg += " | " + "; ".join(details)
-        self._status.text = msg
+        
+        msg_parts = []
+        if exported:
+            msg_parts.append("Exported: " + ", ".join(exported))
+        if errors:
+            msg_parts.append("Errors: " + ", ".join(errors))
+        self._status.text = " | ".join(msg_parts)
 
     def _fit_camera_to_current(self):
         bbox = self._current_bbox
