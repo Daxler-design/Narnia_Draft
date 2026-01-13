@@ -43,6 +43,12 @@ class ViewState:
     
     # Grid: (nx, ny, X, Y)
     grid: Tuple = (None, None, None, None)
+    
+    # Mesh cache: stores generated meshes and their parameters
+    profile_mesh_cache: Optional["o3d.geometry.TriangleMesh"] = None
+    bracing_mesh_cache: Optional["o3d.geometry.TriangleMesh"] = None
+    result_mesh_cache: Optional["o3d.geometry.TriangleMesh"] = None
+    mesh_params_cache: Optional[dict] = None
 
 def print_system_diagnostics():
     print("--- System Diagnostics ---")
@@ -185,3 +191,98 @@ def slice_z(slice_index: int, num_fields: int, bounds_min, bounds_max) -> float:
     if num_fields <= 1:
         return z0
     return z0 + (z1 - z0) * (slice_index / (num_fields - 1))
+
+
+def interpolate_slices(field_data: np.ndarray, num_interpolations: int) -> np.ndarray:
+    """
+    Interpolate between slices for smoother marching cubes results.
+    
+    Args:
+        field_data: 3D array (nz, ny, nx)
+        num_interpolations: number of slices to insert between each pair
+    
+    Returns:
+        Interpolated 3D array with more slices along Z axis
+    """
+    if field_data is None or num_interpolations <= 0:
+        return field_data
+    
+    from scipy import ndimage
+    nz, ny, nx = field_data.shape
+    new_nz = nz + (nz - 1) * num_interpolations
+    zoom_scale = new_nz / nz
+    
+    # Linear interpolation along Z axis only
+    interpolated = ndimage.zoom(field_data, (zoom_scale, 1, 1), order=1)
+    return interpolated
+
+
+def reconstruct_3d_grid(field_data_2d: np.ndarray, nx: int, ny: int, 
+                        bounds_min: np.ndarray, bounds_max: np.ndarray) -> dict:
+    """
+    Reconstruct 3D volume from stacked 2D slices.
+    
+    Args:
+        field_data_2d: 2D array (num_slices, nx*ny)
+        nx, ny: grid dimensions
+        bounds_min, bounds_max: spatial bounds [x, y, z]
+    
+    Returns:
+        dict with 'volume', 'spacing', 'origin'
+    """
+    if field_data_2d is None:
+        return None
+    
+    num_slices = field_data_2d.shape[0]
+    volume = field_data_2d.reshape((num_slices, ny, nx))
+    
+    # Calculate total height from Z bounds
+    total_height = float(bounds_max[2] - bounds_min[2])
+    dz = total_height / (num_slices - 1) if num_slices > 1 else 1.0
+    
+    dx = (bounds_max[0] - bounds_min[0]) / (nx - 1) if nx > 1 else 1.0
+    dy = (bounds_max[1] - bounds_min[1]) / (ny - 1) if ny > 1 else 1.0
+    
+    origin = [float(bounds_min[0]), float(bounds_min[1]), float(bounds_min[2])]
+    
+    return {
+        "volume": volume,
+        "spacing": (dz, dy, dx),  # Z, Y, X spacing for marching cubes
+        "origin": origin
+    }
+
+
+def generate_mesh_marching_cubes(volume: np.ndarray, spacing: Tuple[float, float, float],
+                                 origin: Tuple[float, float, float], 
+                                 iso_level: float = 0.0) -> Optional[Tuple[np.ndarray, np.ndarray]]:
+    """
+    Generate mesh using marching cubes algorithm.
+    
+    Args:
+        volume: 3D scalar field (nz, ny, nx)
+        spacing: (dz, dy, dx) voxel spacing
+        origin: (x0, y0, z0) origin offset
+        iso_level: iso-surface value
+    
+    Returns:
+        (vertices, faces) or None if failed
+    """
+    try:
+        from skimage import measure
+        
+        # Run marching cubes (returns vertices in Z,Y,X order)
+        verts, faces, normals, values = measure.marching_cubes(
+            volume, level=iso_level, spacing=spacing
+        )
+        
+        # Reorder from (z,y,x) to (x,y,z) and apply origin offset
+        verts_xyz = np.zeros_like(verts)
+        verts_xyz[:, 0] = verts[:, 2] + origin[0]  # X
+        verts_xyz[:, 1] = verts[:, 1] + origin[1]  # Y
+        verts_xyz[:, 2] = verts[:, 0] + origin[2]  # Z
+        
+        return verts_xyz, faces
+        
+    except Exception as e:
+        print(f"Marching cubes failed: {e}")
+        return None
