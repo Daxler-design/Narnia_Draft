@@ -84,6 +84,7 @@ class NarniaCurveViewer:
         self._gen_method_combo = gui.Combobox()
         self._gen_method_combo.add_item("static-bracing")
         self._gen_method_combo.add_item("Key-Field Blend")
+        self._gen_method_combo.add_item("Shape-Adaptive")
         self._gen_method_combo.set_on_selection_changed(self._on_gen_method_changed)
         self._gen_options_container.add_child(self._gen_method_combo)
         self._gen_options_container.add_fixed(5)
@@ -128,13 +129,48 @@ class NarniaCurveViewer:
             "Beta (Blend Softness)", 0.0, 20.0, 4.0, None
         )
         self._keyblending_params.add_child(row_beta)
+        
+        # 3. Adaptive Params
+        self._adaptive_params = gui.Vert(0, gui.Margins(0, 0, 0, 0))
+        
+        # Area per seed
+        row_area, self._area_slider, self._area_edit = vwg.create_slider_row(
+            "Area per Seed (px²)", 500.0, 5000.0, 1500.0, None
+        )
+        self._adaptive_params.add_child(row_area)
+        
+        # K min
+        row_kmin, self._kmin_slider, self._kmin_edit = vwg.create_slider_row(
+            "K Min", 2, 10, 2, None, is_int=True
+        )
+        self._adaptive_params.add_child(row_kmin)
+        
+        # K max
+        row_kmax, self._kmax_slider, self._kmax_edit = vwg.create_slider_row(
+            "K Max", 3, 20, 12, None, is_int=True
+        )
+        self._adaptive_params.add_child(row_kmax)
+        
+        # Smooth sigma
+        row_asigma, self._adaptive_smooth_slider, self._adaptive_smooth_edit = vwg.create_slider_row(
+            "Z Smooth (sigma)", 0.0, 5.0, 1.5, None
+        )
+        self._adaptive_params.add_child(row_asigma)
+        
+        # Ramp slices
+        row_ramp, self._ramp_slider, self._ramp_edit = vwg.create_slider_row(
+            "Ramp Slices", 1, 10, 3, None, is_int=True
+        )
+        self._adaptive_params.add_child(row_ramp)
 
         # Initial visibility
         self._static_params.visible = True
         self._keyblending_params.visible = False
+        self._adaptive_params.visible = False
         
         self._gen_options_container.add_child(self._static_params)
         self._gen_options_container.add_child(self._keyblending_params)
+        self._gen_options_container.add_child(self._adaptive_params)
         # ----------------------------------
 
         self._btn_compute = gui.Button("Load / Re-generate Bracing")
@@ -454,8 +490,12 @@ class NarniaCurveViewer:
 
     def _on_gen_method_changed(self, name, index):
         is_static = (index == 0)
+        is_keyblend = (index == 1)
+        is_adaptive = (index == 2)
+        
         self._static_params.visible = is_static
-        self._keyblending_params.visible = not is_static
+        self._keyblending_params.visible = is_keyblend
+        self._adaptive_params.visible = is_adaptive
         self._window.set_needs_layout()
 
     def _on_view_channel_changed(self, name, index):
@@ -1091,7 +1131,26 @@ class NarniaCurveViewer:
                     tau=tau_val,
                     beta=beta_val
                 )
-            else: # static-bracing
+            elif method_idx == 2: # Shape-Adaptive
+                area_val = self._area_slider.double_value
+                kmin_val = int(self._kmin_slider.int_value)
+                kmax_val = int(self._kmax_slider.int_value)
+                smooth_sigma_val = self._adaptive_smooth_slider.double_value
+                ramp_val = int(self._ramp_slider.int_value)
+                
+                print(f"Shape-Adaptive: area={area_val}, k=[{kmin_val},{kmax_val}], smooth={smooth_sigma_val}, ramp={ramp_val}")
+                self.compute_state.bracing = core.generate_bracing_adaptive(
+                    self.compute_state.profile,
+                    self.compute_state.iso_p_base or 0.0,
+                    nx, ny,
+                    area_per_seed=area_val,
+                    k_min=kmin_val,
+                    k_max=kmax_val,
+                    seed=42,
+                    smooth_sigma=smooth_sigma_val,
+                    ramp_slices=ramp_val
+                )
+            else: # static-bracing (method_idx == 0)
                 self.compute_state.bracing = core.generate_bracing_static(
                     self.compute_state.profile,
                     self.compute_state.iso_p_base or 0.0,

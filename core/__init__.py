@@ -81,6 +81,8 @@ from .curves import (
 from .bracing_generator import (
     generate_bracing_static,
     generate_bracing_keyfield_blend,
+    generate_bracing_adaptive,
+    compute_k_from_area,
     compute_voronoi_sdf,
     generate_centroids,
     constrain_centroids_to_mask,
@@ -115,6 +117,8 @@ __all__ = [
     # Bracing generation
     "generate_bracing_static",
     "generate_bracing_keyfield_blend",
+    "generate_bracing_adaptive",
+    "compute_k_from_area",
     "compute_voronoi_sdf",
     "generate_centroids",
     "constrain_centroids_to_mask",
