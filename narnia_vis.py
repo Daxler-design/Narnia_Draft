@@ -250,8 +250,14 @@ class NarniaCurveViewer:
         self._mesh_source_combo = gui.Combobox()
         self._mesh_source_combo.add_item("Compute")
         self._mesh_source_combo.add_item("NPZ Viewer")
+        self._mesh_source_combo.add_item("Custom")
         self._mesh_source_combo.selected_index = 1
         self._mesh_panel.add_child(self._mesh_source_combo)
+        self._mesh_panel.add_fixed(6)
+        
+        # Load Custom NPZ button
+        self._btn_load_custom_npz = gui.Button("Load Custom NPZ...")
+        self._mesh_panel.add_child(self._btn_load_custom_npz)
         self._mesh_panel.add_fixed(10)
 
         self._mesh_panel.add_child(gui.Label("Include"))
@@ -271,33 +277,70 @@ class NarniaCurveViewer:
         # Marching Cubes Parameters
         self._mesh_panel.add_child(gui.Label("--- Marching Cubes Parameters ---"))
         
+        row_m_height, self._mesh_height_slider, self._mesh_height_edit = vwg.create_slider_row(
+            "Total Height", 0.1, 100.0, 10.0, None
+        )
         row_m_interp, self._mesh_interp_slider, self._mesh_interp_edit = vwg.create_slider_row(
             "Z Interpolation", 0, 5, 2, None, is_int=True
         )
-        row_m_iso, self._mesh_iso_slider, self._mesh_iso_edit = vwg.create_slider_row(
-            "Iso Override", -2.0, 2.0, 0.0, None
+        
+        self._mesh_panel.add_child(row_m_height)
+        self._mesh_panel.add_child(row_m_interp)
+        self._mesh_panel.add_fixed(10)
+        
+        # Individual Iso Overrides
+        self._mesh_panel.add_child(gui.Label("--- Iso Overrides ---"))
+        
+        row_m_iso_r, self._mesh_iso_result_slider, self._mesh_iso_result_edit = vwg.create_slider_row(
+            "Result Iso Override", -2.0, 2.0, 0.0, None
+        )
+        row_m_iso_p, self._mesh_iso_profile_slider, self._mesh_iso_profile_edit = vwg.create_slider_row(
+            "Profile Iso Override", -2.0, 2.0, 0.0, None
+        )
+        row_m_iso_b, self._mesh_iso_bracing_slider, self._mesh_iso_bracing_edit = vwg.create_slider_row(
+            "Bracing Iso Override", -2.0, 2.0, 0.0, None
         )
         
-        self._mesh_panel.add_child(row_m_interp)
-        self._mesh_panel.add_child(row_m_iso)
+        self._mesh_panel.add_child(row_m_iso_r)
+        self._mesh_panel.add_child(row_m_iso_p)
+        self._mesh_panel.add_child(row_m_iso_b)
         self._mesh_panel.add_fixed(10)
         
         # Smoothing Parameters
         self._mesh_panel.add_child(gui.Label("--- Smoothing ---"))
         
-        row_m_lap, self._mesh_laplacian_slider, self._mesh_laplacian_edit = vwg.create_slider_row(
-            "Laplacian Iterations", 0, 10, 2, None, is_int=True
-        )
-        row_m_tau, self._mesh_taubin_slider, self._mesh_taubin_edit = vwg.create_slider_row(
-            "Taubin Iterations", 0, 10, 0, None, is_int=True
-        )
+        self._mesh_panel.add_child(gui.Label("Method"))
+        self._mesh_smooth_method_combo = gui.Combobox()
+        self._mesh_smooth_method_combo.add_item("None")
+        self._mesh_smooth_method_combo.add_item("Laplacian")
+        self._mesh_smooth_method_combo.add_item("Taubin")
+        self._mesh_smooth_method_combo.add_item("Laplacian + Taubin")
+        self._mesh_smooth_method_combo.selected_index = 1  # Default to Laplacian
+        self._mesh_panel.add_child(self._mesh_smooth_method_combo)
+        self._mesh_panel.add_fixed(5)
         
-        self._mesh_panel.add_child(row_m_lap)
-        self._mesh_panel.add_child(row_m_tau)
+        row_m_smooth, self._mesh_smooth_slider, self._mesh_smooth_edit = vwg.create_slider_row(
+            "Iterations", 0, 10, 2, None, is_int=True
+        )
+        self._mesh_panel.add_child(row_m_smooth)
+        self._mesh_panel.add_fixed(10)
+
+        self._btn_fit_mesh = gui.Button("Fit Camera")
+        self._mesh_panel.add_child(self._btn_fit_mesh)
         self._mesh_panel.add_fixed(10)
 
         self._btn_generate_mesh = gui.Button("Update Mesh")
         self._mesh_panel.add_child(self._btn_generate_mesh)
+        self._mesh_panel.add_fixed(10)
+        
+        # Export Location
+        self._mesh_panel.add_child(gui.Label("--- Export ---"))
+        row_export_loc, self._mesh_export_location = vwg.create_file_input_row(
+            "Export Location",
+            "./output/mesh",
+            self._on_select_mesh_export_location
+        )
+        self._mesh_panel.add_child(row_export_loc)
         self._mesh_panel.add_fixed(6)
         
         self._btn_export_mesh = gui.Button("Export Mesh (.obj)")
@@ -313,7 +356,10 @@ class NarniaCurveViewer:
         self._panel.preferred_width = 360
         self._panel.add_child(self._tabs)
         self._panel.add_fixed(16)
-        self._panel.add_child(gui.Label("--- Visualization ---"))
+        
+        # Visualization panel (hide in mesh tab)
+        self._viz_label = gui.Label("--- Visualization ---")
+        self._panel.add_child(self._viz_label)
 
         self._slice_slider = gui.Slider(gui.Slider.INT)
         self._slice_slider.set_limits(0, 0)
@@ -334,12 +380,17 @@ class NarniaCurveViewer:
 
         self._status = gui.Label("Load data to start.")
 
-        self._panel.add_child(gui.Label("Slice"))
+        # Store slice label for visibility control
+        self._slice_label = gui.Label("Slice")
+        self._panel.add_child(self._slice_label)
         self._panel.add_child(self._slice_slider)
         self._panel.add_fixed(10)
         self._panel.add_child(self._btn_fit)
         self._panel.add_fixed(16)
-        self._panel.add_child(gui.Label("--- Export ---"))
+        
+        # Export panel (hide in mesh tab)
+        self._export_label = gui.Label("--- Export ---")
+        self._panel.add_child(self._export_label)
         self._panel.add_child(gui.Label("Output Directory"))
         
         h = gui.Horiz(4)
@@ -347,10 +398,10 @@ class NarniaCurveViewer:
         h.add_child(self._btn_select_output)
         self._panel.add_child(h)
         
-        h_opts = gui.Horiz(10)
-        h_opts.add_child(self._chk_export_profile)
-        h_opts.add_child(self._chk_export_bracing)
-        self._panel.add_child(h_opts)
+        self._export_opts_horiz = gui.Horiz(10)
+        self._export_opts_horiz.add_child(self._chk_export_profile)
+        self._export_opts_horiz.add_child(self._chk_export_bracing)
+        self._panel.add_child(self._export_opts_horiz)
         self._panel.add_fixed(10)
         
         self._panel.add_child(self._btn_export)
@@ -364,12 +415,14 @@ class NarniaCurveViewer:
 
         self._btn_compute.set_on_clicked(self._on_compute)
         self._btn_fit.set_on_clicked(self._on_fit)
+        self._btn_fit_mesh.set_on_clicked(self._on_fit)
         self._btn_select_output.set_on_clicked(self._on_select_output)
         self._btn_export.set_on_clicked(self._on_export)
         # self._btn_select_npz is now handled in _create_file_input_row callback
         self._btn_load_npz.set_on_clicked(self._on_load_npz)
         self._btn_generate_mesh.set_on_clicked(self._on_generate_mesh)
         self._btn_export_mesh.set_on_clicked(self._on_export_mesh)
+        self._btn_load_custom_npz.set_on_clicked(self._on_load_custom_npz)
         self._slice_slider.set_on_value_changed(self._on_slice_changed)
         self._tabs.set_on_selected_tab_changed(self._on_tab_changed)
 
@@ -379,6 +432,8 @@ class NarniaCurveViewer:
         # --- State ---
         self.compute_state = vut.ViewState()
         self.viewer_state = vut.ViewState()
+        self.custom_state = vut.ViewState()  # For custom NPZ loaded from Mesh tab
+        self.custom_npz_path: Optional[str] = None  # Track custom NPZ filename
 
         self._curves_geom: Optional[o3d.geometry.LineSet] = None
         self._profile_geom: Optional[o3d.geometry.LineSet] = None
@@ -400,10 +455,28 @@ class NarniaCurveViewer:
         self._update_slider_ranges()
 
     def _on_tab_changed(self, index):
+        # Hide/show visualization and export panels based on tab
+        is_mesh_tab = (index == self._mesh_tab_index)
+        
+        # Hide slice controls and export panel in mesh tab
+        self._viz_label.visible = not is_mesh_tab
+        self._slice_label.visible = not is_mesh_tab
+        self._slice_slider.visible = not is_mesh_tab
+        self._btn_fit.visible = not is_mesh_tab
+        self._export_label.visible = not is_mesh_tab
+        self._output_dir.visible = not is_mesh_tab
+        self._btn_select_output.visible = not is_mesh_tab
+        self._export_opts_horiz.visible = not is_mesh_tab
+        self._btn_export.visible = not is_mesh_tab
+        
+        self._window.set_needs_layout()
+        
         if index == self._mesh_tab_index:
             self._clear_curve_geometries()
-            if self._profile_mesh is None and self._bracing_mesh is None:
-                self._status.text = "Mesh view. Generate meshes to display."
+            # Try to show cached meshes from current source
+            self._refresh_mesh_from_cache()
+            if self._profile_mesh is None and self._bracing_mesh is None and self._result_mesh is None:
+                self._status.text = "Mesh view. Select source and generate meshes."
             return
 
         self._clear_mesh_geometries()
@@ -627,6 +700,19 @@ class NarniaCurveViewer:
 
     def _on_npz_file_done(self, path):
         self._npz_path.text_value = path
+    
+    def _on_select_mesh_export_location(self):
+        """Browse button callback for mesh export location."""
+        vwg.show_file_dialog(
+            self._window,
+            "Select Mesh Export Folder",
+            self._on_mesh_export_location_done,
+            mode=gui.FileDialog.OPEN_DIR
+        )
+    
+    def _on_mesh_export_location_done(self, path):
+        """Callback when mesh export folder is selected."""
+        self._mesh_export_location.text_value = path
 
     def _on_file_dialog_cancel(self):
         # Deprecated, handled by vwg.show_file_dialog
@@ -642,6 +728,122 @@ class NarniaCurveViewer:
             return p
         # Resolve relative to the directory where the app started
         return (self._base_dir / p).resolve()
+    
+    def _on_load_custom_npz(self):
+        """Load a custom NPZ file from the Mesh tab, auto-detect available fields."""
+        vwg.show_file_dialog(
+            self._window,
+            "Select Custom NPZ File",
+            self._on_custom_npz_file_done,
+            filters=[(".npz", "NPZ files (.npz)")]
+        )
+    
+    def _on_custom_npz_file_done(self, path):
+        """Callback when custom NPZ is selected - load and auto-populate mesh tab."""
+        self._status.text = "Loading custom NPZ file..."
+        self._window.set_needs_layout()
+        
+        npz_path = Path(path)
+        if not npz_path.exists():
+            self._status.text = f"File not found: {npz_path}"
+            return
+        
+        try:
+            data = np.load(npz_path, allow_pickle=True)
+            
+            # Auto-detect available fields
+            res_fields = data.get("result_fields", None)
+            if res_fields is not None and (res_fields.ndim == 0 or res_fields.size == 0):
+                res_fields = None
+            
+            prof_fields = data.get("profile_fields", None)
+            if prof_fields is not None and (prof_fields.ndim == 0 or prof_fields.size == 0):
+                prof_fields = None
+            
+            brac_fields = data.get("bracing_fields", None)
+            if brac_fields is not None and (brac_fields.ndim == 0 or brac_fields.size == 0):
+                brac_fields = None
+            
+            brac_clean = data.get("bracing_clean_fields", None)
+            if brac_clean is not None and (brac_clean.ndim == 0 or brac_clean.size == 0):
+                brac_clean = None
+            
+            # Check if at least one field exists
+            if res_fields is None and prof_fields is None and brac_fields is None:
+                self._status.text = "No valid fields found in NPZ file."
+                return
+            
+            # Load bounds
+            current_bmin = self.custom_state.bounds_min if self.custom_state.bounds_min is not None else (
+                self.viewer_state.bounds_min if self.viewer_state.bounds_min is not None else self.compute_state.bounds_min
+            )
+            current_bmax = self.custom_state.bounds_max if self.custom_state.bounds_max is not None else (
+                self.viewer_state.bounds_max if self.viewer_state.bounds_max is not None else self.compute_state.bounds_max
+            )
+            
+            bmin = data.get("bounds_min", current_bmin)
+            bmax = data.get("bounds_max", current_bmax)
+            
+            if bmin is None or bmax is None:
+                bmin = np.array([0.0, 0.0, 0.0])
+                bmax = np.array([100.0, 100.0, 100.0])
+            
+            # Load iso level
+            iso = float(data.get("iso_level", 0.0))
+            
+            # Load total_height if available
+            total_height = data.get("total_height", None)
+            if total_height is not None:
+                try:
+                    total_height = float(total_height) if np.isscalar(total_height) or total_height.size == 1 else 10.0
+                except:
+                    total_height = 10.0
+            else:
+                total_height = 10.0
+            
+            # Update custom state
+            self.custom_state.result = res_fields
+            self.custom_state.profile = prof_fields
+            self.custom_state.bracing = brac_fields
+            self.custom_state.bracing_clean = brac_clean
+            self.custom_state.bounds_min = bmin
+            self.custom_state.bounds_max = bmax
+            self.custom_state.iso_p_base = iso
+            self.custom_state.iso_b_base = iso
+            
+            # Infer grid from first available field
+            first_field = res_fields if res_fields is not None else (prof_fields if prof_fields is not None else brac_fields)
+            num_fields, nx, ny = core.infer_grid_from_scalar_fields(first_field)
+            x = np.linspace(bmin[0], bmax[0], nx)
+            y = np.linspace(bmin[1], bmax[1], ny)
+            X, Y = np.meshgrid(x, y, indexing="xy")
+            self.custom_state.grid = (nx, ny, X, Y)
+            
+            # Store custom NPZ filename
+            self.custom_npz_path = npz_path.name
+            
+            # Update mesh source dropdown to show "Custom: filename"
+            self._mesh_source_combo.remove_item(2)  # Remove old "Custom" entry
+            self._mesh_source_combo.add_item(f"Custom: {npz_path.name}")
+            self._mesh_source_combo.selected_index = 2  # Select the custom source
+            
+            # Update mesh tab UI
+            self._mesh_height_slider.double_value = total_height
+            self._mesh_height_edit.double_value = total_height
+            
+            # Auto-check mesh checkboxes based on available fields
+            self._mesh_chk_result.checked = (res_fields is not None)
+            self._mesh_chk_profile.checked = (prof_fields is not None)
+            self._mesh_chk_bracing.checked = (brac_fields is not None or brac_clean is not None)
+            
+            # Clear existing meshes (custom state has fresh cache)
+            self._clear_mesh_geometries()
+            
+            self._status.text = f"Loaded custom NPZ: {npz_path.name} - select source and click Update Mesh"
+            self._window.set_needs_layout()
+            
+        except Exception as e:
+            self._status.text = f"Load custom NPZ failed: {e}"
 
     def _on_load_npz(self):
         self._status.text = "Loading NPZ file..."
@@ -690,6 +892,18 @@ class NarniaCurveViewer:
             self.viewer_state.bounds_max = bmax
             self.viewer_state.iso_p_base = iso
             
+            # Load total_height if available, otherwise default to 10.0
+            total_height = data.get("total_height", None)
+            if total_height is not None:
+                try:
+                    total_height = float(total_height) if np.isscalar(total_height) or total_height.size == 1 else 10.0
+                except:
+                    total_height = 10.0
+            else:
+                total_height = 10.0
+            self._mesh_height_slider.double_value = total_height
+            self._mesh_height_edit.double_value = total_height
+            
             num_fields, nx, ny = core.infer_grid_from_scalar_fields(res_fields)
             x = np.linspace(bmin[0], bmax[0], nx)
             y = np.linspace(bmin[1], bmax[1], ny)
@@ -737,8 +951,8 @@ class NarniaCurveViewer:
 
             iso_level = float(slider.double_value)
             
-            # Calculate total height from bounds
-            total_height = float(bmax[2] - bmin[2]) if bmax is not None and bmin is not None else 10.0
+            # Get total height from mesh tab slider (for future mesh generation)
+            total_height = float(self._mesh_height_slider.double_value)
             
             save_dict = {
                 "result_fields": res,
@@ -1129,9 +1343,10 @@ class NarniaCurveViewer:
         bounds_max,
         nx,
         ny,
+        total_height,
         z_interp_steps,
-        laplacian_iters,
-        taubin_iters,
+        smooth_method,
+        smooth_iterations,
     ):
         """
         Generate mesh using marching cubes algorithm.
@@ -1139,11 +1354,12 @@ class NarniaCurveViewer:
         Args:
             fields: 2D array (num_slices, nx*ny) of scalar field values
             iso_level: iso-surface threshold
-            bounds_min, bounds_max: spatial bounds
+            bounds_min, bounds_max: spatial bounds (XY only, Z handled by total_height)
             nx, ny: grid dimensions
+            total_height: explicit Z-extent of the mesh
             z_interp_steps: number of interpolation steps between slices
-            laplacian_iters: Laplacian smoothing iterations
-            taubin_iters: Taubin smoothing iterations
+            smooth_method: "none", "laplacian", "taubin", or "combined"
+            smooth_iterations: number of iterations for smoothing
         
         Returns:
             Open3D TriangleMesh or None
@@ -1151,8 +1367,12 @@ class NarniaCurveViewer:
         if fields is None or fields.shape[0] < 2:
             return None
         
+        # Override Z bounds with total_height
+        bounds_min_3d = np.array([bounds_min[0], bounds_min[1], 0.0])
+        bounds_max_3d = np.array([bounds_max[0], bounds_max[1], total_height])
+        
         # Reconstruct 3D volume from 2D slices
-        grid_data = vut.reconstruct_3d_grid(fields, nx, ny, bounds_min, bounds_max)
+        grid_data = vut.reconstruct_3d_grid(fields, nx, ny, bounds_min_3d, bounds_max_3d)
         if grid_data is None:
             return None
         
@@ -1163,7 +1383,6 @@ class NarniaCurveViewer:
             volume = vut.interpolate_slices(volume, z_interp_steps)
             # Recalculate spacing after interpolation
             nz_new = volume.shape[0]
-            total_height = float(bounds_max[2] - bounds_min[2])
             dz_new = total_height / (nz_new - 1) if nz_new > 1 else grid_data["spacing"][0]
             grid_data["spacing"] = (dz_new, grid_data["spacing"][1], grid_data["spacing"][2])
         
@@ -1194,12 +1413,17 @@ class NarniaCurveViewer:
         mesh.remove_degenerate_triangles()
         mesh.remove_non_manifold_edges()
         
-        # Apply smoothing
-        if laplacian_iters > 0:
-            mesh = mesh.filter_smooth_simple(number_of_iterations=int(laplacian_iters))
-        
-        if taubin_iters > 0:
-            mesh = mesh.filter_smooth_taubin(number_of_iterations=int(taubin_iters))
+        # Apply smoothing based on method
+        method_lower = smooth_method.lower()
+        if smooth_iterations > 0:
+            if method_lower == "laplacian":
+                mesh = mesh.filter_smooth_simple(number_of_iterations=int(smooth_iterations))
+            elif method_lower == "taubin":
+                mesh = mesh.filter_smooth_taubin(number_of_iterations=int(smooth_iterations))
+            elif method_lower == "combined" or method_lower == "laplacian + taubin":
+                # Apply both: Laplacian first, then Taubin
+                mesh = mesh.filter_smooth_simple(number_of_iterations=int(smooth_iterations))
+                mesh = mesh.filter_smooth_taubin(number_of_iterations=int(smooth_iterations))
         
         mesh.compute_vertex_normals()
         return mesh
@@ -1275,41 +1499,66 @@ class NarniaCurveViewer:
         
         def compute_meshes():
             """Background thread computation."""
-            source = self._mesh_source_combo.get_item(self._mesh_source_combo.selected_index)
-            state = self.compute_state if source == "Compute" else self.viewer_state
+            source_text = self._mesh_source_combo.get_item(self._mesh_source_combo.selected_index)
+            
+            # Determine which state to use based on source
+            if source_text == "Compute":
+                state = self.compute_state
+            elif source_text == "NPZ Viewer":
+                state = self.viewer_state
+            elif source_text.startswith("Custom"):
+                state = self.custom_state
+            else:
+                # Fallback to viewer state
+                state = self.viewer_state
 
             if state.bounds_min is None or state.bounds_max is None:
-                return None, f"No bounds available for {source} data."
+                return None, f"No bounds available for {source_text} data."
 
             if state.result is None and state.profile is None and state.bracing is None:
-                return None, f"No {source} data loaded."
+                return None, f"No {source_text} data loaded."
 
             grid = self._ensure_state_grid(state)
             if grid is None:
-                return None, f"Missing grid data for {source}."
+                return None, f"Missing grid data for {source_text}."
 
             nx, ny, X, Y = grid
             
             # Get mesh parameters
+            total_height = float(self._mesh_height_slider.double_value)
             z_interp = int(self._mesh_interp_slider.int_value)
-            iso_override = float(self._mesh_iso_slider.double_value)
-            laplacian_iters = int(self._mesh_laplacian_slider.int_value)
-            taubin_iters = int(self._mesh_taubin_slider.int_value)
+            
+            # Get individual iso overrides
+            iso_override_result = float(self._mesh_iso_result_slider.double_value)
+            iso_override_profile = float(self._mesh_iso_profile_slider.double_value)
+            iso_override_bracing = float(self._mesh_iso_bracing_slider.double_value)
+            
+            # Get smoothing parameters
+            smooth_method_idx = self._mesh_smooth_method_combo.selected_index
+            smooth_methods = ["None", "Laplacian", "Taubin", "Laplacian + Taubin"]
+            smooth_method = smooth_methods[smooth_method_idx]
+            smooth_iterations = int(self._mesh_smooth_slider.int_value)
             
             # Build parameter hash for cache checking
             params = {
+                "total_height": total_height,
                 "z_interp": z_interp,
-                "iso_override": iso_override,
-                "laplacian": laplacian_iters,
-                "taubin": taubin_iters,
+                "iso_override_result": iso_override_result,
+                "iso_override_profile": iso_override_profile,
+                "iso_override_bracing": iso_override_bracing,
+                "smooth_method": smooth_method,
+                "smooth_iterations": smooth_iterations,
             }
             
             # Check if we can use cached meshes
             use_cache = (state.mesh_params_cache == params)
             
-            iso_p = state.iso_p_base + iso_override
-            iso_b = state.iso_b_base + iso_override
-            if source == "Compute":
+            # Calculate iso levels with individual overrides
+            iso_r = state.iso_p_base + iso_override_result
+            iso_p = state.iso_p_base + iso_override_profile
+            iso_b = state.iso_b_base + iso_override_bracing
+            
+            if source_text == "Compute":
                 iso_p += self._profile_offset_slider.double_value
                 iso_b += self._bracing_offset_slider.double_value
 
@@ -1329,14 +1578,15 @@ class NarniaCurveViewer:
                     try:
                         result_mesh = self._build_mesh_from_fields(
                             state.result,
-                            iso_p,
+                            iso_r,
                             state.bounds_min,
                             state.bounds_max,
                             nx,
                             ny,
+                            total_height,
                             z_interp,
-                            laplacian_iters,
-                            taubin_iters,
+                            smooth_method,
+                            smooth_iterations,
                         )
                         state.result_mesh_cache = result_mesh
                         if result_mesh:
@@ -1360,9 +1610,10 @@ class NarniaCurveViewer:
                             state.bounds_max,
                             nx,
                             ny,
+                            total_height,
                             z_interp,
-                            laplacian_iters,
-                            taubin_iters,
+                            smooth_method,
+                            smooth_iterations,
                         )
                         state.profile_mesh_cache = profile_mesh
                         if profile_mesh:
@@ -1387,9 +1638,10 @@ class NarniaCurveViewer:
                             state.bounds_max,
                             nx,
                             ny,
+                            total_height,
                             z_interp,
-                            laplacian_iters,
-                            taubin_iters,
+                            smooth_method,
+                            smooth_iterations,
                         )
                         state.bracing_mesh_cache = bracing_mesh
                         if bracing_mesh:
@@ -1426,7 +1678,7 @@ class NarniaCurveViewer:
                     self._status.text = "Mesh generation produced no geometry."
                 return
 
-            self._apply_mesh_geometries(result_mesh, profile_mesh, bracing_mesh, fit_camera=True)
+            self._apply_mesh_geometries(result_mesh, profile_mesh, bracing_mesh, fit_camera=False)
             self._status.text = "Mesh generated: " + " | ".join(details)
         
         # Run in background thread
@@ -1440,12 +1692,17 @@ class NarniaCurveViewer:
     
     def _on_export_mesh(self):
         """Export generated meshes to OBJ files."""
-        output_dir = Path(self._output_dir.text_value)
+        # Get export location from mesh tab (custom location or default)
+        export_location = self._mesh_export_location.text_value.strip()
+        if not export_location:
+            export_location = "./output/mesh"  # Default fallback
+        
+        output_dir = self._resolve_path(export_location)
         if not output_dir.exists():
             try:
                 output_dir.mkdir(parents=True, exist_ok=True)
             except Exception as e:
-                self._status.text = f"Cannot create output dir: {e}"
+                self._status.text = f"Cannot create export dir: {e}"
                 return
         
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1501,6 +1758,30 @@ class NarniaCurveViewer:
             )
 
         self._scene_widget.setup_camera(60.0, bbox, bbox.get_center())
+    
+    def _refresh_mesh_from_cache(self):
+        """When switching to mesh tab, display cached meshes from current source if available."""
+        source_text = self._mesh_source_combo.get_item(self._mesh_source_combo.selected_index)
+        
+        # Determine which state to use
+        if source_text == "Compute":
+            state = self.compute_state
+        elif source_text == "NPZ Viewer":
+            state = self.viewer_state
+        elif source_text.startswith("Custom"):
+            state = self.custom_state
+        else:
+            return
+        
+        # Display cached meshes if available
+        if state.result_mesh_cache is not None or state.profile_mesh_cache is not None or state.bracing_mesh_cache is not None:
+            self._apply_mesh_geometries(
+                state.result_mesh_cache,
+                state.profile_mesh_cache,
+                state.bracing_mesh_cache,
+                fit_camera=False
+            )
+            self._status.text = f"Showing cached meshes from {source_text}"
 
 
 def run_app(
