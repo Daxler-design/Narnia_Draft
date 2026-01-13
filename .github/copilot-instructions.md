@@ -1,20 +1,43 @@
 # Narnia SDF / Curve Viewer — Copilot Instructions
 
 ## Project overview
-- This repo loads stacked scalar fields (SDF-like data), extracts iso-curves per slice, and visualizes them in an Open3D GUI viewer.
-- Keep compute logic in `core.py` and UI logic in `narnia_vis.py`.
+- This repo loads stacked scalar fields (SDF-like data), extracts iso-curves per slice, generates meshes via marching cubes, and visualizes them in an Open3D GUI viewer.
+- **Refactored (Phase 1-6 complete)**: Core logic modularized into `core/` package, GUI helpers in `gui/` package.
+- Keep compute logic in `core/` modules and UI logic in `narnia_vis.py`.
 - Prefer minimal, surgical diffs that preserve current behavior unless the user explicitly asks for refactors.
 
 ## Key entry points
-- Use `python main.py` as the primary entry point for local runs.
+- Use `python main.py` as the primary entry point for local GUI runs.
+- Use `MeshFromNPZ.py` (stable) or `examples/grasshopper_mesh_core.py` (experimental) for CLI mesh generation.
 - Do not create an Open3D GUI context at import time; only initialize GUI inside `run_app*` flows.
 
 ## Repo map (for context)
-- `main.py`: entry point; loads NPZ/JSON; launches viewer.
-- `core.py`: scalar-field ops, boolean ops, iso-curves, centroid/voronoi utilities.
+- `main.py`: GUI entry point; loads NPZ/JSON; launches viewer.
+- **core/** package (modular):
+  - `data_utils.py`: NPZ/JSON loading, grid inference (3 functions)
+  - `curves.py`: ISO-curve extraction (1 function)
+  - `sdf_operations.py`: Boolean operations on SDFs (1 function)
+  - `bracing_generator.py`: Voronoi-based bracing generation (6 functions)
+  - `postprocess.py`: Morphological cleaning, temporal smoothing (4 functions)
+  - `mesh_generator.py`: Marching cubes, smoothing, OBJ export (5 functions)
+  - `__init__.py`: Public API (22 exported functions)
+  - `README.md`: Module documentation with usage examples
+- **gui/** package:
+  - `widgets.py`: GUI widget factories
+  - `mesh_builders.py`: Mesh building utilities for Open3D viewer
+  - `__init__.py`: Package exports
 - `narnia_vis.py`: Open3D GUI app (tabs, callbacks, scene updates, export).
-- `vis_utils.py`: stability env vars, monitor selection, Open3D helpers (LineSet, slice_z).
-- `vis_widgets.py`: small GUI widget factories.
+- `vis_utils.py`: Stability env vars, monitor selection, Open3D helpers (LineSet, slice_z).
+- **MeshFromNPZ.py**: STABLE production CLI tool for Grasshopper subprocess integration (DO NOT DELETE).
+- **examples/**:
+  - `grasshopper_mesh_core.py`: Enhanced CLI tool using core package (with smoothing feature).
+  - `python_api_demo.py`: Library usage examples for scripts/notebooks.
+
+## Grasshopper Integration
+- `MeshFromNPZ.py` is the production-proven tool used in Grasshopper workflows via subprocess.
+- `examples/grasshopper_mesh_core.py` demonstrates core package integration for testing new features (e.g., mesh smoothing).
+- Both maintain identical CLI interface for drop-in compatibility.
+- See `README.md` for complete Grasshopper subprocess pattern with caching and error handling.
 
 ## Stability and performance constraints
 - Preserve the thread limiting approach (environment variables / threadpool limits) to avoid system freezes.
