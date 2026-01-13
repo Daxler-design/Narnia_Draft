@@ -1,3 +1,18 @@
+"""
+Visualization utilities for Narnia GUI.
+
+This module provides GUI-specific helpers:
+- System diagnostics and monitor detection
+- ViewState dataclass for GUI state management
+- Open3D geometry conversions (curves → LineSet, scalar → textures)
+- Slice Z-coordinate calculation
+
+Note: Mesh generation functions (interpolate_slices, reconstruct_3d_volume, 
+generate_mesh_marching_cubes) have been moved to core/mesh_generator.py.
+Import them from core package instead:
+    from core import interpolate_slices, reconstruct_3d_volume, generate_mesh_marching_cubes
+"""
+
 import os
 
 # --- 1. STABILITY & GPU SETTINGS ---
@@ -50,7 +65,13 @@ class ViewState:
     result_mesh_cache: Optional["o3d.geometry.TriangleMesh"] = None
     mesh_params_cache: Optional[dict] = None
 
+
+# ============================================================================
+# System Diagnostics & Monitor Detection
+# ============================================================================
+
 def print_system_diagnostics():
+    """Print system diagnostics including monitor detection."""
     print("--- System Diagnostics ---")
     try:
         monitors = get_monitors_info()
@@ -61,6 +82,7 @@ def print_system_diagnostics():
     except Exception as e:
         print(f"Could not detect monitors: {e}")
     print("--------------------------\n")
+
 
 def get_monitors_info():
     """Returns a list of monitor information dictionaries using Windows API."""
@@ -96,12 +118,13 @@ def get_monitors_info():
     ctypes.windll.user32.EnumDisplayMonitors(None, None, MONITORENUMPROC(callback), 0)
     return monitors
 
-def generate_mesh_from_curves(all_curves, bounds_min, bounds_max):
-    """Placeholder for future mesh generation."""
-    raise NotImplementedError("Mesh generation from curves is not implemented yet.")
 
+# ============================================================================
+# Open3D Geometry Helpers
+# ============================================================================
 
 def normalize_to_u8(img_2d: np.ndarray) -> np.ndarray:
+    """Normalize 2D array to uint8 range for texture mapping."""
     arr = np.asarray(img_2d, dtype=float)
     finite = np.isfinite(arr)
     if not np.any(finite):
@@ -117,6 +140,16 @@ def normalize_to_u8(img_2d: np.ndarray) -> np.ndarray:
 
 
 def curves_to_lineset(curves_2d: list[np.ndarray], z: float) -> Optional[o3d.geometry.LineSet]:
+    """
+    Convert list of 2D curves to Open3D LineSet at specified Z height.
+    
+    Args:
+        curves_2d: List of 2D curve arrays, each with shape (N, 2) [x, y]
+        z: Z-coordinate for all curve points
+    
+    Returns:
+        Open3D LineSet or None if no valid curves
+    """
     points = []
     lines = []
     cursor = 0
@@ -140,6 +173,17 @@ def curves_to_lineset(curves_2d: list[np.ndarray], z: float) -> Optional[o3d.geo
 
 
 def make_textured_plane(bounds_min, bounds_max, z: float):
+    """
+    Create a textured plane mesh at specified Z height.
+    
+    Args:
+        bounds_min: [x_min, y_min] or [x_min, y_min, z_min]
+        bounds_max: [x_max, y_max] or [x_max, y_max, z_max]
+        z: Z-coordinate for the plane
+    
+    Returns:
+        Open3D TriangleMesh with UV coordinates
+    """
     x0, y0 = float(bounds_min[0]), float(bounds_min[1])
     x1, y1 = float(bounds_max[0]), float(bounds_max[1])
     verts = np.array(
@@ -171,10 +215,19 @@ def make_textured_plane(bounds_min, bounds_max, z: float):
 
 
 def scalar_to_overlay_colors(values_2d: np.ndarray, opacity: float, bg_rgb=(0.07, 0.07, 0.07)) -> np.ndarray:
-    """Map scalar values to grayscale RGB, blended with background by `opacity`.
+    """
+    Map scalar values to grayscale RGB, blended with background by opacity.
 
     Open3D point clouds don't reliably support per-vertex alpha in all backends,
     so we approximate opacity by blending against the background color.
+    
+    Args:
+        values_2d: 2D scalar field array
+        opacity: Opacity factor [0.0, 1.0]
+        bg_rgb: Background color as (R, G, B) tuple
+    
+    Returns:
+        Array of RGB colors with shape (N, 3)
     """
     opacity = float(np.clip(opacity, 0.0, 1.0))
     u8 = normalize_to_u8(values_2d)
@@ -186,184 +239,20 @@ def scalar_to_overlay_colors(values_2d: np.ndarray, opacity: float, bg_rgb=(0.07
 
 
 def slice_z(slice_index: int, num_fields: int, bounds_min, bounds_max) -> float:
+    """
+    Calculate Z-coordinate for a given slice index.
+    
+    Args:
+        slice_index: Slice index (0-based)
+        num_fields: Total number of slices
+        bounds_min: Bounds minimum [x, y, z]
+        bounds_max: Bounds maximum [x, y, z]
+    
+    Returns:
+        Z-coordinate for the slice
+    """
     z0 = float(bounds_min[2])
     z1 = float(bounds_max[2])
     if num_fields <= 1:
         return z0
     return z0 + (z1 - z0) * (slice_index / (num_fields - 1))
-
-
-def interpolate_slices(field_data: np.ndarray, num_interpolations: int) -> np.ndarray:
-    """
-    Interpolate between slices along Z-axis for smoother marching cubes results.
-    
-    Uses linear interpolation (scipy.ndimage.zoom) to insert additional slices
-    between existing ones, improving mesh quality for datasets with sparse Z-sampling.
-    
-    Args:
-        field_data: 3D scalar field array with shape (nz, ny, nx)
-                   - nz: number of original slices
-                   - ny, nx: spatial dimensions of each slice
-        num_interpolations: Number of new slices to insert between each pair of
-                           existing slices. Total new slices = nz + (nz-1)*num_interpolations
-                           Example: 10 slices with num_interpolations=2 → 28 slices
-    
-    Returns:
-        Interpolated 3D array with shape (new_nz, ny, nx) where:
-        new_nz = nz + (nz - 1) * num_interpolations
-        Returns original array unchanged if num_interpolations <= 0 or field_data is None
-    
-    Example:
-        >>> field = np.random.rand(10, 50, 50)  # 10 slices
-        >>> interpolated = interpolate_slices(field, num_interpolations=2)
-        >>> interpolated.shape
-        (28, 50, 50)  # 10 + (10-1)*2 = 28 slices
-    
-    Note:
-        - Uses order=1 (linear) interpolation for speed and stability
-        - Only interpolates along Z-axis; XY dimensions remain unchanged
-        - Recommended num_interpolations: 1-5 for most datasets
-    """
-    if field_data is None or num_interpolations <= 0:
-        return field_data
-    
-    from scipy import ndimage
-    nz, ny, nx = field_data.shape
-    new_nz = nz + (nz - 1) * num_interpolations
-    zoom_scale = new_nz / nz
-    
-    # Linear interpolation along Z axis only
-    interpolated = ndimage.zoom(field_data, (zoom_scale, 1, 1), order=1)
-    return interpolated
-
-
-def reconstruct_3d_grid(field_data_2d: np.ndarray, nx: int, ny: int, 
-                        bounds_min: np.ndarray, bounds_max: np.ndarray) -> dict:
-    """
-    Reconstruct 3D volume from stacked 2D scalar field slices.
-    
-    Converts flattened 2D slice data into a proper 3D volume array with
-    spatial metadata (spacing, origin) required for marching cubes meshing.
-    
-    Args:
-        field_data_2d: 2D array with shape (num_slices, nx*ny)
-                      Each row is a flattened 2D slice of the scalar field
-        nx: Number of grid points in X direction (columns)
-        ny: Number of grid points in Y direction (rows)
-        bounds_min: Spatial bounds minimum [x_min, y_min, z_min]
-        bounds_max: Spatial bounds maximum [x_max, y_max, z_max]
-    
-    Returns:
-        Dictionary containing:
-        - 'volume': 3D numpy array (num_slices, ny, nx) - reshaped scalar field
-        - 'spacing': Tuple (dz, dy, dx) - voxel spacing in each dimension
-        - 'origin': List [x0, y0, z0] - origin point for coordinate system
-        
-        Returns None if field_data_2d is None
-    
-    Example:
-        >>> field_2d = np.random.rand(20, 2500)  # 20 slices, 50x50 grid
-        >>> bounds_min = np.array([0, 0, 0])
-        >>> bounds_max = np.array([100, 100, 10])
-        >>> grid_data = reconstruct_3d_grid(field_2d, 50, 50, bounds_min, bounds_max)
-        >>> grid_data['volume'].shape
-        (20, 50, 50)
-        >>> grid_data['spacing']
-        (0.526..., 2.04..., 2.04...)  # (dz, dy, dx)
-    
-    Note:
-        - Spacing is calculated as: dz = (z_max - z_min) / (num_slices - 1)
-        - Spacing format (dz, dy, dx) matches scikit-image marching_cubes convention
-        - Origin is set to bounds_min for proper world-space coordinates
-    """
-    if field_data_2d is None:
-        return None
-    
-    num_slices = field_data_2d.shape[0]
-    volume = field_data_2d.reshape((num_slices, ny, nx))
-    
-    # Calculate total height from Z bounds
-    total_height = float(bounds_max[2] - bounds_min[2])
-    dz = total_height / (num_slices - 1) if num_slices > 1 else 1.0
-    
-    dx = (bounds_max[0] - bounds_min[0]) / (nx - 1) if nx > 1 else 1.0
-    dy = (bounds_max[1] - bounds_min[1]) / (ny - 1) if ny > 1 else 1.0
-    
-    origin = [float(bounds_min[0]), float(bounds_min[1]), float(bounds_min[2])]
-    
-    return {
-        "volume": volume,
-        "spacing": (dz, dy, dx),  # Z, Y, X spacing for marching cubes
-        "origin": origin
-    }
-
-
-def generate_mesh_marching_cubes(volume: np.ndarray, spacing: Tuple[float, float, float],
-                                 origin: Tuple[float, float, float], 
-                                 iso_level: float = 0.0) -> Optional[Tuple[np.ndarray, np.ndarray]]:
-    """
-    Generate triangle mesh from 3D scalar field using marching cubes algorithm.
-    
-    Uses scikit-image's marching_cubes implementation to extract an iso-surface
-    from a 3D volume at a specified threshold level. Handles coordinate system
-    transformations to convert from scikit-image's (Z,Y,X) convention to
-    standard (X,Y,Z) world coordinates.
-    
-    Args:
-        volume: 3D scalar field array with shape (nz, ny, nx)
-               Values represent the scalar field at each voxel
-        spacing: Voxel spacing as (dz, dy, dx) tuple
-                Controls the physical size of each voxel in world units
-                Example: (0.5, 2.0, 2.0) means dz=0.5, dy=2.0, dx=2.0
-        origin: World-space origin as (x0, y0, z0) tuple
-               Offset to apply to all vertex coordinates
-               Example: (100, 50, 0) shifts mesh to start at x=100, y=50, z=0
-        iso_level: Iso-surface threshold value (default: 0.0)
-                  Vertices will be placed where volume == iso_level
-                  Typical range: -1.0 to 1.0 for normalized SDFs
-    
-    Returns:
-        Tuple of (vertices, faces) where:
-        - vertices: (N, 3) array of vertex positions in world coordinates (X,Y,Z)
-        - faces: (M, 3) array of triangle indices (zero-based)
-        
-        Returns None if marching cubes fails (e.g., no iso-surface found)
-    
-    Example:
-        >>> volume = np.random.rand(20, 50, 50)
-        >>> spacing = (0.5, 2.0, 2.0)
-        >>> origin = (0, 0, 0)
-        >>> result = generate_mesh_marching_cubes(volume, spacing, origin, iso_level=0.5)
-        >>> if result:
-        ...     vertices, faces = result
-        ...     print(f"Mesh: {len(vertices)} vertices, {len(faces)} triangles")
-    
-    Note:
-        - scikit-image returns vertices in (Z,Y,X) order, this function converts to (X,Y,Z)
-        - Spacing must match the order (dz, dy, dx) from reconstruct_3d_grid()
-        - If no iso-surface exists at the given level, returns None
-        - Typical execution time: 50-500ms depending on volume size
-    
-    References:
-        - Lorensen & Cline (1987): "Marching Cubes: A High Resolution 3D Surface Construction Algorithm"
-        - scikit-image documentation: https://scikit-image.org/docs/stable/api/skimage.measure.html#marching-cubes
-    """
-    try:
-        from skimage import measure
-        
-        # Run marching cubes (returns vertices in Z,Y,X order)
-        verts, faces, normals, values = measure.marching_cubes(
-            volume, level=iso_level, spacing=spacing
-        )
-        
-        # Reorder from (z,y,x) to (x,y,z) and apply origin offset
-        verts_xyz = np.zeros_like(verts)
-        verts_xyz[:, 0] = verts[:, 2] + origin[0]  # X
-        verts_xyz[:, 1] = verts[:, 1] + origin[1]  # Y
-        verts_xyz[:, 2] = verts[:, 0] + origin[2]  # Z
-        
-        return verts_xyz, faces
-        
-    except Exception as e:
-        print(f"Marching cubes failed: {e}")
-        return None
