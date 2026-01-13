@@ -338,3 +338,247 @@ def generate_bracing_keyfield_blend(profile_fields_2d, iso_level, nx, ny, keys_c
         bracing_fields[i] = field.ravel()
 
     return bracing_fields
+
+
+def compute_k_from_area(mask: np.ndarray, area_per_seed: float, k_min: int = 2, k_max: int = 12) -> int:
+    """
+    Compute optimal number of centroids based on mask area.
+    
+    Args:
+        mask: Boolean mask (ny, nx)
+        area_per_seed: Target pixels per centroid (e.g., 1500.0)
+        k_min: Minimum centroids (default: 2)
+        k_max: Maximum centroids (default: 12)
+    
+    Returns:
+        Number of centroids k, clamped to [k_min, k_max]
+    
+    Example:
+        >>> mask = np.ones((100, 100), dtype=bool)  # 10000 px²
+        >>> k = compute_k_from_area(mask, area_per_seed=2000, k_min=2, k_max=10)
+        >>> k
+        5  # 10000 / 2000 = 5 centroids
+    
+    Note:
+        - Returns k_min if mask has no valid pixels
+        - Rounds to nearest integer
+        - Clamps result to [k_min, k_max] range
+    """
+    area = float(np.sum(mask))
+    if area <= 0:
+        return k_min
+    
+    k_ideal = area / max(area_per_seed, 1.0)
+    k = int(round(k_ideal))
+    return max(k_min, min(k, k_max))
+
+
+def generate_bracing_adaptive(
+    profile_fields_2d: np.ndarray,
+    iso_level: float,
+    nx: int,
+    ny: int,
+    area_per_seed: float = 1500.0,
+    k_min: int = 2,
+    k_max: int = 12,
+    seed: int = 42,
+    smooth_sigma: float = 1.5,
+    ramp_slices: int = 3
+) -> np.ndarray:
+    """
+    Generate shape-adaptive bracing with automatic centroid count.
+    
+    Automatically determines k per slice based on mask area, provides smooth
+    transitions when k changes via Gaussian smoothing and ramped weights.
+    Better geometric quality than keyfield blend - maintains consistent
+    cell sizes across varying profile shapes.
+    
+    Args:
+        profile_fields_2d: Profile scalar fields (num_slices, nx*ny)
+        iso_level: Threshold for profile mask
+        nx: Grid width
+        ny: Grid height
+        area_per_seed: Target pixels per centroid (default: 1500.0)
+        k_min: Minimum centroids per slice (default: 2)
+        k_max: Maximum centroids per slice (default: 12)
+        seed: Random seed for K-means
+        smooth_sigma: Gaussian sigma for Z-axis centroid smoothing (default: 1.5)
+        ramp_slices: Number of slices for weight ramp when k increases (default: 3)
+    
+    Returns:
+        Bracing fields array (num_slices, nx*ny) with Voronoi SDF values
+    
+    Example:
+        >>> profile = np.random.rand(60, 2500) - 0.5
+        >>> bracing = generate_bracing_adaptive(
+        ...     profile, 0.0, 50, 50,
+        ...     area_per_seed=1500, k_min=3, k_max=8
+        ... )
+        >>> bracing.shape
+        (60, 2500)
+    
+    Note:
+        - Adapts k to shape area → uniform cell sizes
+        - Smooth centroid trajectories (Gaussian filter along Z)
+        - Ramped weights prevent sudden "pop-in" of new cells
+        - Progress printed every 10 slices
+    """
+    from scipy.ndimage import gaussian_filter1d
+    
+    num_slices = profile_fields_2d.shape[0]
+    bracing_fields = np.zeros_like(profile_fields_2d)
+    
+    # Step 1: Compute k-schedule based on area
+    k_schedule = np.zeros(num_slices, dtype=int)
+    for z in range(num_slices):
+        slice_2d = profile_fields_2d[z].reshape((ny, nx))
+        mask = get_profile_mask(slice_2d, iso_level)
+        k_schedule[z] = compute_k_from_area(mask, area_per_seed, k_min, k_max)
+    
+    max_k = int(k_schedule.max())
+    if max_k == 0:
+        return bracing_fields
+    
+    # Step 2: Generate per-slice centroids with warm-start
+    all_centroids_rc = np.full((num_slices, max_k, 2), np.nan)
+    for z in range(num_slices):
+        slice_2d = profile_fields_2d[z].reshape((ny, nx))
+        mask = get_profile_mask(slice_2d, iso_level)
+        k_active = k_schedule[z]
+        
+        if k_active == 0:
+            continue
+        
+        # Warm-start from previous slice
+        prev_centroids = None
+        if z > 0 and k_schedule[z-1] > 0:
+            prev_k = k_schedule[z-1]
+            if prev_k >= k_active:
+                # Same or fewer centroids → use subset
+                prev_centroids = all_centroids_rc[z-1, :k_active]
+            else:
+                # More centroids needed → use all previous + init new randomly
+                prev_centroids = all_centroids_rc[z-1, :prev_k]
+        
+        centroids = generate_centroids(mask, k=k_active, prev_centroids=prev_centroids, seed=seed + z)
+        centroids = constrain_centroids_to_mask(centroids, mask)
+        all_centroids_rc[z, :k_active] = centroids
+    
+    # Step 3: Smooth centroid trajectories along Z with Gaussian filter
+    for i in range(max_k):
+        for coord_idx in [0, 1]:  # r, c
+            trajectory = all_centroids_rc[:, i, coord_idx].copy()
+            
+            # Find valid (non-NaN) range
+            valid_mask = ~np.isnan(trajectory)
+            if not np.any(valid_mask):
+                continue
+            
+            # Apply Gaussian smoothing only to valid range
+            if smooth_sigma > 0:
+                # Replace NaNs with forward/backward fill for smoothing
+                filled = trajectory.copy()
+                valid_indices = np.where(valid_mask)[0]
+                if len(valid_indices) > 0:
+                    first_valid = valid_indices[0]
+                    last_valid = valid_indices[-1]
+                    
+                    # Forward fill
+                    for z in range(first_valid + 1, num_slices):
+                        if np.isnan(filled[z]):
+                            filled[z] = filled[z-1]
+                    
+                    # Backward fill
+                    for z in range(first_valid - 1, -1, -1):
+                        if np.isnan(filled[z]):
+                            filled[z] = filled[z+1]
+                    
+                    # Smooth
+                    smoothed = gaussian_filter1d(filled, sigma=smooth_sigma, mode='nearest')
+                    
+                    # Restore NaN mask
+                    smoothed[~valid_mask] = np.nan
+                    all_centroids_rc[:, i, coord_idx] = smoothed
+    
+    # Step 4: Compute activation weights (ramp-up for new centroids)
+    weights = np.zeros((num_slices, max_k))
+    birth_z = np.full(max_k, -1, dtype=int)  # Track when each centroid first appeared
+    
+    for z in range(num_slices):
+        k_curr = k_schedule[z]
+        for i in range(k_curr):
+            if not np.isnan(all_centroids_rc[z, i, 0]):
+                # Check if this is first appearance
+                if birth_z[i] < 0:
+                    birth_z[i] = z
+                
+                # Ramp weight based on age
+                age = z - birth_z[i]
+                weights[z, i] = min(1.0, (age + 1) / max(ramp_slices, 1))
+    
+    # Step 5: Generate Voronoi ridge fields
+    for z in range(num_slices):
+        slice_2d = profile_fields_2d[z].reshape((ny, nx))
+        mask = get_profile_mask(slice_2d, iso_level)
+        k_active = k_schedule[z]
+        
+        if k_active == 0:
+            continue
+        
+        centroids_rc = all_centroids_rc[z, :k_active]
+        valid_centroids = centroids_rc[~np.isnan(centroids_rc[:, 0])]
+        
+        if len(valid_centroids) == 0:
+            continue
+        
+        # Weighted Voronoi ridge
+        w = weights[z, :k_active]
+        ridge = _compute_weighted_voronoi_ridge((ny, nx), valid_centroids, w)
+        
+        ridge[~mask] = -9999  # Outside mask = solid
+        bracing_fields[z] = ridge.ravel()
+        
+        if z % 10 == 0:
+            print(f"Generated adaptive bracing for slice {z}/{num_slices} (k={k_active})")
+    
+    return bracing_fields
+
+
+def _compute_weighted_voronoi_ridge(shape: Tuple[int, int], centroids: np.ndarray, weights: np.ndarray) -> np.ndarray:
+    """
+    Internal helper: Compute weighted Voronoi ridge (d2 - d1).
+    
+    Args:
+        shape: (ny, nx) tuple
+        centroids: (k, 2) array of [y, x] positions
+        weights: (k,) array of influence weights
+    
+    Returns:
+        Ridge field (ny, nx) where positive values are cell boundaries
+    """
+    ny, nx = shape
+    Y, X = np.meshgrid(np.arange(ny), np.arange(nx), indexing='ij')
+    
+    if len(centroids) == 0:
+        return np.zeros((ny, nx), dtype=float)
+    
+    # Compute weighted distances to all centroids
+    dists = np.zeros((ny, nx, len(centroids)))
+    for i, (cy, cx) in enumerate(centroids):
+        w_i = weights[i] if i < len(weights) else 1.0
+        # Avoid division by zero
+        w_i = max(w_i, 0.01)
+        dists[:, :, i] = np.sqrt((Y - cy)**2 + (X - cx)**2) / w_i
+    
+    # Find 1st and 2nd nearest
+    if len(centroids) == 1:
+        # Only one centroid → ridge is zero everywhere
+        return np.zeros((ny, nx), dtype=float)
+    
+    sorted_dists = np.sort(dists, axis=2)
+    d1 = sorted_dists[:, :, 0]
+    d2 = sorted_dists[:, :, 1]
+    
+    ridge = d2 - d1
+    return ridge
+

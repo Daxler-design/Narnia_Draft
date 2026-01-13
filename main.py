@@ -17,28 +17,17 @@ NUM_CENTROIDS_END = 4  # Interpolate from 3 to 8
 OP_MODE = "difference" # difference, union, intersection
 
 # Bracing Method
-# - "voronoi": existing ridge-style bracing
-# - "cell_wall": field-first cell wall bracing (W/B volumes)
-BRACING_METHOD = "voronoi"
+# - "voronoi": static ridge-style bracing (simple)
+# - "keyfield_blend": manual keyframes with interpolation
+# - "adaptive": shape-adaptive (auto k based on area) - RECOMMENDED
+BRACING_METHOD = "adaptive"
 
-# Cell-wall Parameters
-CELL_TAU = 12.0
-CELL_WALL_METHOD = "entropy"  # "entropy" or "top2gap"
-CELL_SMOOTH_XY_SIGMA = 1.0
-CELL_WALL_THRESHOLD = 0.6
-CELL_WALL_THICKNESS_PX = 2.0
-CELL_SMOOTH_Z_SIGMA = 0.75
-CELL_RAMP_SLICES = 5
-
-# Optional OT-guided transport (seed advection)
-USE_OT_TRANSPORT = True
-OT_NUM_SAMPLES = 600
-OT_BAND_PX = 6.0
-OT_EPSILON = 8.0
-OT_MAX_ITER = 400
-OT_TOL = 1e-3
-OT_RBF_SMOOTH = 5.0
-OT_MAX_DISP_PX = 20.0
+# Adaptive Bracing Parameters (for BRACING_METHOD="adaptive")
+ADAPTIVE_AREA_PER_SEED = 1500.0  # Target pixels per Voronoi cell
+ADAPTIVE_K_MIN = 2               # Minimum centroids per slice
+ADAPTIVE_K_MAX = 12              # Maximum centroids per slice
+ADAPTIVE_SMOOTH_SIGMA = 1.5      # Z-axis smoothing (slices)
+ADAPTIVE_RAMP_SLICES = 3         # Weight ramp for new centroids
 
 # Paths
 PROFILE_JSON_PATH = Path("./alice_result/251120/ext/waveStackFields.json")
@@ -78,23 +67,50 @@ def main():
     
     # 2. Generate or Load Bracing
     if GENERATE_BRACING:
-        print(f"Generating bracing ({BRACING_METHOD})...")
+        print(f"Generating bracing (Method: {BRACING_METHOD})...")
         
-        # NOTE: The 'cell_wall' method logic relying on track_seeds_with_splits/compute_volume_cell_walls
-        # has been removed from core.py. Currently only 'voronoi' (static or keyframe) is supported in core.
-        
-        print(f"Generating bracing (Centroids: {NUM_CENTROIDS_START} -> {NUM_CENTROIDS_END})...")
-        # Use the existing interpolated Voronoi ridge pipeline
         with threadpool_limits(limits=1):
-            bracing_fields_2d = core.generate_bracing_keyfield_blend(
-                profile_fields_2d,
-                iso_level=iso_level_profile,
-                nx=nx,
-                ny=ny,
-                keys_config=[(0, NUM_CENTROIDS_START), (profile_fields_2d.shape[0]-1, NUM_CENTROIDS_END)],
-                smooth=0.5, # reasonable default
-                seed=42
-            )
+            if BRACING_METHOD == "adaptive":
+                # Shape-adaptive: auto-determines k per slice based on area
+                print(f"  Area per seed: {ADAPTIVE_AREA_PER_SEED} px²")
+                print(f"  K range: [{ADAPTIVE_K_MIN}, {ADAPTIVE_K_MAX}]")
+                bracing_fields_2d = core.generate_bracing_adaptive(
+                    profile_fields_2d,
+                    iso_level=iso_level_profile,
+                    nx=nx,
+                    ny=ny,
+                    area_per_seed=ADAPTIVE_AREA_PER_SEED,
+                    k_min=ADAPTIVE_K_MIN,
+                    k_max=ADAPTIVE_K_MAX,
+                    seed=42,
+                    smooth_sigma=ADAPTIVE_SMOOTH_SIGMA,
+                    ramp_slices=ADAPTIVE_RAMP_SLICES
+                )
+            
+            elif BRACING_METHOD == "keyfield_blend":
+                # Manual keyframes (original implementation)
+                print(f"  Centroids: {NUM_CENTROIDS_START} -> {NUM_CENTROIDS_END}")
+                bracing_fields_2d = core.generate_bracing_keyfield_blend(
+                    profile_fields_2d,
+                    iso_level=iso_level_profile,
+                    nx=nx,
+                    ny=ny,
+                    keys_config=[(0, NUM_CENTROIDS_START), (profile_fields_2d.shape[0]-1, NUM_CENTROIDS_END)],
+                    smooth=0.5,
+                    seed=42
+                )
+            
+            else:  # "voronoi" - simple static
+                print(f"  Static k={NUM_CENTROIDS_START} centroids")
+                bracing_fields_2d = core.generate_bracing_static(
+                    profile_fields_2d,
+                    iso_level=iso_level_profile,
+                    nx=nx,
+                    ny=ny,
+                    k=NUM_CENTROIDS_START,
+                    seed=42
+                )
+        
         iso_level_bracing = 0.0
     else:
         print(f"Loading bracing from: {BRACING_JSON_PATH}")
