@@ -25,6 +25,12 @@ import os
 import argparse
 import sys
 
+# Add parent directory to path for core package import (needed when running from examples/)
+script_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.dirname(script_dir)
+if parent_dir not in sys.path:
+    sys.path.insert(0, parent_dir)
+
 # Import core package functions
 try:
     from core import interpolate_slices, reconstruct_3d_volume, generate_mesh_marching_cubes, smooth_mesh
@@ -47,17 +53,16 @@ def load_npz_file(file_path, verbose=False):
 
 
 def extract_field(data, field_name, verbose=False):
-    """Extract and reshape NPZ field from (S, N) to (S, n, n) if N is perfect square."""
+    """Extract NPZ field - keep as 2D (S, N) for core package compatibility."""
     if field_name in data:
         field = data[field_name]
-        # Many fields are saved as flattened (NumSlices, Nx*Ny)
+        # Keep field as 2D (NumSlices, Nx*Ny) - core.reconstruct_3d_volume expects this format
         if field.ndim == 2:
             num_slices, values_per_field = field.shape
             n = int(np.sqrt(values_per_field))
             if n * n == values_per_field:
                 if verbose:
-                    print(f"Reshaping {field_name} from {field.shape} to ({num_slices}, {n}, {n})")
-                field = field.reshape(num_slices, n, n)
+                    print(f"Loaded {field_name}: {field.shape} (will reshape to ({num_slices}, {n}, {n}) internally)")
             else:
                 if verbose:
                     print(f"Warning: Field {field_name} has {values_per_field} values, which is not a perfect square.")
@@ -109,11 +114,20 @@ def resolve_parameters(args, data):
     bounds_min = get_array(data, "bounds_min")
     bounds_max = get_array(data, "bounds_max")
     
-    # Convert 2D bounds to 3D (add Z=0)
-    if bounds_min is not None and len(bounds_min) == 2:
-        bounds_min = np.array([bounds_min[0], bounds_min[1], 0.0])
-    if bounds_max is not None and len(bounds_max) == 2:
-        bounds_max = np.array([bounds_max[0], bounds_max[1], total_height])
+    # Ensure 3D bounds with correct Z range based on total_height
+    if bounds_min is not None:
+        if len(bounds_min) == 2:
+            bounds_min = np.array([bounds_min[0], bounds_min[1], 0.0])
+        else:
+            # Even if 3D, ensure Z_min is 0
+            bounds_min = np.array([bounds_min[0], bounds_min[1], 0.0])
+    
+    if bounds_max is not None:
+        if len(bounds_max) == 2:
+            bounds_max = np.array([bounds_max[0], bounds_max[1], total_height])
+        else:
+            # Update Z_max to match total_height (don't trust NPZ Z bounds)
+            bounds_max = np.array([bounds_max[0], bounds_max[1], total_height])
     
     return total_height, iso_level, bounds_min, bounds_max
 
@@ -172,31 +186,45 @@ def main():
         # 3. Resolve Parameters
         total_height, iso_level, bounds_min, bounds_max = resolve_parameters(args, data)
         
-        # 4. Extract & Process Field
+        # 4. Extract Field (keep as 2D)
         field_data = extract_field(data, args.field, verbose=args.verbose)
         if field_data is None:
             sys.stderr.write(f"Error: Field '{args.field}' not found in {args.npz}\n")
             sys.exit(1)
         
-        # 5. Interpolate slices using core package
+        # 5. Infer grid dimensions from 2D field shape
+        num_slices, values_per_field = field_data.shape
+        n = int(np.sqrt(values_per_field))
+        if n * n != values_per_field:
+            sys.stderr.write(f"Error: Field has {values_per_field} values, not a perfect square\n")
+            sys.exit(1)
+        nx, ny = n, n
+        
+        # 6. Reshape to 3D for interpolation (core.interpolate_slices expects 3D)
+        field_data_3d = field_data.reshape(num_slices, ny, nx)
+        
+        # 7. Interpolate slices using core package
         if args.verbose:
             print(f"Interpolating slices (num_interpolations={args.interp})...")
-        field_data_int = interpolate_slices(field_data, num_interpolations=args.interp)
+        field_data_int = interpolate_slices(field_data_3d, num_interpolations=args.interp)
         
-        # 6. Reconstruct 3D volume using core package
-        nz, ny, nx = field_data_int.shape
+        # 8. Flatten back to 2D for reconstruct_3d_volume (expects 2D input)
+        nz_int, ny_int, nx_int = field_data_int.shape
+        field_data_2d = field_data_int.reshape(nz_int, ny_int * nx_int)
+        
         if args.verbose:
-            print(f"Reconstructing 3D volume: shape=({nz}, {ny}, {nx}), height={total_height}")
+            print(f"Reconstructing 3D volume: {field_data_2d.shape} -> ({nz_int}, {ny_int}, {nx_int}), height={total_height}")
         
+        # 9. Reconstruct 3D volume using core package (expects 2D input, returns 3D volume)
         grid_data = reconstruct_3d_volume(
-            field_data_int,
-            nx=nx,
-            ny=ny,
+            field_data_2d,
+            nx=nx_int,
+            ny=ny_int,
             bounds_min=bounds_min,
             bounds_max=bounds_max
         )
         
-        # 7. Generate Mesh using core package
+        # 10. Generate Mesh using core package
         if args.verbose:
             print(f"Generating mesh for '{args.field}' at iso_level {iso_level}...")
         
@@ -213,7 +241,7 @@ def main():
         
         verts, faces = result
         
-        # 8. Optional Smoothing (NEW FEATURE)
+        # 11. Optional Smoothing (NEW FEATURE)
         if args.smooth:
             if args.verbose:
                 print(f"Applying {args.smooth} smoothing ({args.iterations} iterations)...")
@@ -236,7 +264,7 @@ def main():
             except Exception as e:
                 sys.stderr.write(f"Warning: Smoothing failed: {e}\n")
 
-        # 9. Save Output
+        # 12. Save Output
         out_path = args.out if args.out else args.npz.replace(".npz", f"_{args.field}_core.obj")
         if save_mesh_to_obj(verts, faces, out_path, verbose=args.verbose):
             # Print ONLY the output path to stdout on success (GH capture)
@@ -258,7 +286,7 @@ if __name__ == "__main__":
     if len(sys.argv) == 1:
         print("--- DEBUG MODE DETECTED (No args provided) ---")
         
-        debug_npz = "output/processed_sdf_results_20260112_130342.npz"
+        debug_npz = "output\processed_sdf_results_20260113_173944.npz"
         
         if os.path.exists(debug_npz):
             sys.argv.append("--npz")
