@@ -19,15 +19,24 @@ OP_MODE = "difference" # difference, union, intersection
 # Bracing Method
 # - "voronoi": static ridge-style bracing (simple)
 # - "keyfield_blend": manual keyframes with interpolation
-# - "adaptive": shape-adaptive (auto k based on area) - RECOMMENDED
-BRACING_METHOD = "adaptive"
+# - "adaptive": shape-adaptive (auto k based on area)
+# - "binary": biological cell splitting (1→2→4→8) - RECOMMENDED for smooth transitions
+BRACING_METHOD = "binary"
 
 # Adaptive Bracing Parameters (for BRACING_METHOD="adaptive")
-ADAPTIVE_AREA_PER_SEED = 1500.0  # Target pixels per Voronoi cell
-ADAPTIVE_K_MIN = 2               # Minimum centroids per slice
+ADAPTIVE_AREA_PER_SEED = 600.0   # Target pixels per Voronoi cell (lower = more responsive)
+ADAPTIVE_K_MIN = 1               # Minimum centroids per slice
 ADAPTIVE_K_MAX = 12              # Maximum centroids per slice
 ADAPTIVE_SMOOTH_SIGMA = 1.5      # Z-axis smoothing (slices)
 ADAPTIVE_RAMP_SLICES = 3         # Weight ramp for new centroids
+
+# Binary Splitting Parameters (for BRACING_METHOD="binary")
+# Z-based progression: k grows evenly from K_START to K_MAX over slices
+BINARY_K_START = 2               # Starting number of cells (must be power of 2: 1, 2, 4, 8, 16)
+BINARY_K_MAX = 16                # Maximum cells (power of 2) - ALWAYS reached
+BINARY_SPLIT_OFFSET = 5.0        # Distance between parent and children during split
+BINARY_SMOOTH_SIGMA = 1.5        # Z-axis trajectory smoothing
+BINARY_RAMP_SLICES = 3           # Weight ramp for newly born cells
 
 # Paths
 PROFILE_JSON_PATH = Path("./alice_result/251120/ext/waveStackFields.json")
@@ -70,7 +79,24 @@ def main():
         print(f"Generating bracing (Method: {BRACING_METHOD})...")
         
         with threadpool_limits(limits=1):
-            if BRACING_METHOD == "adaptive":
+            if BRACING_METHOD == "binary":
+                # Binary cell splitting: Z-based progression (k grows evenly over slices)
+                print(f"  K range: {BINARY_K_START} -> {BINARY_K_MAX} (Z-based, powers of 2)")
+                bracing_fields_2d = core.generate_bracing_adaptive_binary(
+                    profile_fields_2d,
+                    iso_level=iso_level_profile,
+                    nx=nx,
+                    ny=ny,
+                    area_per_cell=700.0,  # Unused but required by API
+                    k_start=BINARY_K_START,
+                    k_max=BINARY_K_MAX,
+                    split_offset=BINARY_SPLIT_OFFSET,
+                    seed=42,
+                    smooth_sigma=BINARY_SMOOTH_SIGMA,
+                    ramp_slices=BINARY_RAMP_SLICES
+                )
+            
+            elif BRACING_METHOD == "adaptive":
                 # Shape-adaptive: auto-determines k per slice based on area
                 print(f"  Area per seed: {ADAPTIVE_AREA_PER_SEED} px²")
                 print(f"  K range: [{ADAPTIVE_K_MIN}, {ADAPTIVE_K_MAX}]")

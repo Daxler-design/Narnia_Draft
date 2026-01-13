@@ -85,6 +85,7 @@ class NarniaCurveViewer:
         self._gen_method_combo.add_item("static-bracing")
         self._gen_method_combo.add_item("Key-Field Blend")
         self._gen_method_combo.add_item("Shape-Adaptive")
+        self._gen_method_combo.add_item("Binary Splitting")
         self._gen_method_combo.set_on_selection_changed(self._on_gen_method_changed)
         self._gen_options_container.add_child(self._gen_method_combo)
         self._gen_options_container.add_fixed(5)
@@ -135,13 +136,13 @@ class NarniaCurveViewer:
         
         # Area per seed
         row_area, self._area_slider, self._area_edit = vwg.create_slider_row(
-            "Area per Seed (px²)", 500.0, 5000.0, 1500.0, None
+            "Area per Seed (px²)", 200.0, 3000.0, 600.0, None
         )
         self._adaptive_params.add_child(row_area)
         
         # K min
         row_kmin, self._kmin_slider, self._kmin_edit = vwg.create_slider_row(
-            "K Min", 2, 10, 2, None, is_int=True
+            "K Min", 1, 10, 1, None, is_int=True
         )
         self._adaptive_params.add_child(row_kmin)
         
@@ -162,15 +163,60 @@ class NarniaCurveViewer:
             "Ramp Slices", 1, 10, 3, None, is_int=True
         )
         self._adaptive_params.add_child(row_ramp)
+        
+        # 4. Binary Splitting Params
+        self._binary_params = gui.Vert(0, gui.Margins(0, 0, 0, 0))
+        
+        # Info label
+        self._binary_params.add_child(gui.Label("(Z-based: k grows evenly over slices)"))
+        self._binary_params.add_fixed(5)
+        
+        # K start (dropdown: 1, 2, 4, 8, 16)
+        self._binary_params.add_child(gui.Label("K Start (cells)"))
+        self._binary_k_start_combo = gui.Combobox()
+        for k in [1, 2, 4, 8, 16]:
+            self._binary_k_start_combo.add_item(str(k))
+        self._binary_k_start_combo.selected_index = 1  # Default to 2
+        self._binary_params.add_child(self._binary_k_start_combo)
+        self._binary_params.add_fixed(5)
+        
+        # K max (dropdown: 1, 2, 4, 8, 16, 32)
+        self._binary_params.add_child(gui.Label("K Max (cells)"))
+        self._binary_k_max_combo = gui.Combobox()
+        for k in [1, 2, 4, 8, 16, 32]:
+            self._binary_k_max_combo.add_item(str(k))
+        self._binary_k_max_combo.selected_index = 4  # Default to 16
+        self._binary_params.add_child(self._binary_k_max_combo)
+        self._binary_params.add_fixed(5)
+        
+        # Split offset
+        row_offset, self._split_offset_slider, self._split_offset_edit = vwg.create_slider_row(
+            "Split Offset", 1.0, 20.0, 5.0, None
+        )
+        self._binary_params.add_child(row_offset)
+        
+        # Smooth sigma
+        row_bsigma, self._binary_smooth_slider, self._binary_smooth_edit = vwg.create_slider_row(
+            "Z Smooth (sigma)", 0.0, 5.0, 1.5, None
+        )
+        self._binary_params.add_child(row_bsigma)
+        
+        # Ramp slices
+        row_bramp, self._binary_ramp_slider, self._binary_ramp_edit = vwg.create_slider_row(
+            "Ramp Slices", 1, 10, 3, None, is_int=True
+        )
+        self._binary_params.add_child(row_bramp)
 
         # Initial visibility
         self._static_params.visible = True
         self._keyblending_params.visible = False
         self._adaptive_params.visible = False
+        self._binary_params.visible = False
         
         self._gen_options_container.add_child(self._static_params)
         self._gen_options_container.add_child(self._keyblending_params)
         self._gen_options_container.add_child(self._adaptive_params)
+        self._gen_options_container.add_child(self._binary_params)
         # ----------------------------------
 
         self._btn_compute = gui.Button("Load / Re-generate Bracing")
@@ -492,10 +538,12 @@ class NarniaCurveViewer:
         is_static = (index == 0)
         is_keyblend = (index == 1)
         is_adaptive = (index == 2)
+        is_binary = (index == 3)
         
         self._static_params.visible = is_static
         self._keyblending_params.visible = is_keyblend
         self._adaptive_params.visible = is_adaptive
+        self._binary_params.visible = is_binary
         self._window.set_needs_layout()
 
     def _on_view_channel_changed(self, name, index):
@@ -1149,6 +1197,28 @@ class NarniaCurveViewer:
                     seed=42,
                     smooth_sigma=smooth_sigma_val,
                     ramp_slices=ramp_val
+                )
+            elif method_idx == 3: # Binary Splitting
+                k_start_powers = [1, 2, 4, 8, 16]
+                k_max_powers = [1, 2, 4, 8, 16, 32]
+                k_start_val = k_start_powers[self._binary_k_start_combo.selected_index]
+                k_max_val = k_max_powers[self._binary_k_max_combo.selected_index]
+                offset_val = self._split_offset_slider.double_value
+                binary_smooth_val = self._binary_smooth_slider.double_value
+                binary_ramp_val = int(self._binary_ramp_slider.int_value)
+                
+                print(f"Binary Splitting: k={k_start_val}→{k_max_val} (Z-based), offset={offset_val}, smooth={binary_smooth_val}, ramp={binary_ramp_val}")
+                self.compute_state.bracing = core.generate_bracing_adaptive_binary(
+                    self.compute_state.profile,
+                    self.compute_state.iso_p_base or 0.0,
+                    nx, ny,
+                    area_per_cell=700.0,  # Unused but required by API
+                    k_start=k_start_val,
+                    k_max=k_max_val,
+                    split_offset=offset_val,
+                    seed=42,
+                    smooth_sigma=binary_smooth_val,
+                    ramp_slices=binary_ramp_val
                 )
             else: # static-bracing (method_idx == 0)
                 self.compute_state.bracing = core.generate_bracing_static(
