@@ -9,8 +9,10 @@ from open3d.visualization import gui
 from open3d.visualization import rendering
 
 import core
+import core.sdf_operations as sdf
 import vis_utils as vut
-import vis_widgets as vwg
+from gui import widgets as vwg
+from gui import mesh_builders as mesh_build
 
 
 class NarniaCurveViewer:
@@ -1239,7 +1241,7 @@ class NarniaCurveViewer:
 
         # 1. Main Curves
         slice_2d = res[idx].reshape((ny, nx))
-        curves = core.iso_curves_for_slice_2d(slice_2d, inputs["iso"], X, Y)
+        curves = sdf.iso_curves_for_slice_2d(slice_2d, inputs["iso"], X, Y)
         
         # No filtering/simplification
 
@@ -1255,7 +1257,7 @@ class NarniaCurveViewer:
         # 2. Profile Curves
         if inputs["prof"] is not None:
             p_slice_2d = inputs["prof"][idx].reshape((ny, nx))
-            p_curves = core.iso_curves_for_slice_2d(p_slice_2d, inputs["iso_p"], X, Y)
+            p_curves = sdf.iso_curves_for_slice_2d(p_slice_2d, inputs["iso_p"], X, Y)
             p_ls = vut.curves_to_lineset(p_curves, z)
             if p_ls is not None:
                 p_mat = rendering.MaterialRecord()
@@ -1267,7 +1269,7 @@ class NarniaCurveViewer:
         # 3. Bracing Curves
         if inputs["brac"] is not None:
             b_slice_2d = inputs["brac"][idx].reshape((ny, nx))
-            b_curves = core.iso_curves_for_slice_2d(b_slice_2d, inputs["iso_b"], X, Y)
+            b_curves = sdf.iso_curves_for_slice_2d(b_slice_2d, inputs["iso_b"], X, Y)
             # No filtering/simplification
             b_ls = vut.curves_to_lineset(b_curves, z)
             if b_ls is not None:
@@ -1387,83 +1389,12 @@ class NarniaCurveViewer:
     ):
         """
         Generate mesh using marching cubes algorithm.
-        
-        Args:
-            fields: 2D array (num_slices, nx*ny) of scalar field values
-            iso_level: iso-surface threshold
-            bounds_min, bounds_max: spatial bounds (XY only, Z handled by total_height)
-            nx, ny: grid dimensions
-            total_height: explicit Z-extent of the mesh
-            z_interp_steps: number of interpolation steps between slices
-            smooth_method: "none", "laplacian", "taubin", or "combined"
-            smooth_iterations: number of iterations for smoothing
-        
-        Returns:
-            Open3D TriangleMesh or None
+        Delegates to gui.mesh_builders.build_mesh_from_fields().
         """
-        if fields is None or fields.shape[0] < 2:
-            return None
-        
-        # Override Z bounds with total_height
-        bounds_min_3d = np.array([bounds_min[0], bounds_min[1], 0.0])
-        bounds_max_3d = np.array([bounds_max[0], bounds_max[1], total_height])
-        
-        # Reconstruct 3D volume from 2D slices
-        grid_data = vut.reconstruct_3d_grid(fields, nx, ny, bounds_min_3d, bounds_max_3d)
-        if grid_data is None:
-            return None
-        
-        volume = grid_data["volume"]
-        
-        # Apply Z-axis interpolation if requested
-        if z_interp_steps > 0:
-            volume = vut.interpolate_slices(volume, z_interp_steps)
-            # Recalculate spacing after interpolation
-            nz_new = volume.shape[0]
-            dz_new = total_height / (nz_new - 1) if nz_new > 1 else grid_data["spacing"][0]
-            grid_data["spacing"] = (dz_new, grid_data["spacing"][1], grid_data["spacing"][2])
-        
-        # Run marching cubes
-        result = vut.generate_mesh_marching_cubes(
-            volume,
-            grid_data["spacing"],
-            grid_data["origin"],
-            iso_level
+        return mesh_build.build_mesh_from_fields(
+            fields, iso_level, bounds_min, bounds_max, nx, ny,
+            total_height, z_interp_steps, smooth_method, smooth_iterations
         )
-        
-        if result is None:
-            return None
-        
-        verts, faces = result
-        
-        if len(verts) == 0 or len(faces) == 0:
-            return None
-        
-        # Create Open3D mesh
-        mesh = o3d.geometry.TriangleMesh()
-        mesh.vertices = o3d.utility.Vector3dVector(verts)
-        mesh.triangles = o3d.utility.Vector3iVector(faces)
-        
-        # Cleanup
-        mesh.remove_duplicated_vertices()
-        mesh.remove_duplicated_triangles()
-        mesh.remove_degenerate_triangles()
-        mesh.remove_non_manifold_edges()
-        
-        # Apply smoothing based on method
-        method_lower = smooth_method.lower()
-        if smooth_iterations > 0:
-            if method_lower == "laplacian":
-                mesh = mesh.filter_smooth_simple(number_of_iterations=int(smooth_iterations))
-            elif method_lower == "taubin":
-                mesh = mesh.filter_smooth_taubin(number_of_iterations=int(smooth_iterations))
-            elif method_lower == "combined" or method_lower == "laplacian + taubin":
-                # Apply both: Laplacian first, then Taubin
-                mesh = mesh.filter_smooth_simple(number_of_iterations=int(smooth_iterations))
-                mesh = mesh.filter_smooth_taubin(number_of_iterations=int(smooth_iterations))
-        
-        mesh.compute_vertex_normals()
-        return mesh
 
     def _apply_mesh_geometries(self, result_mesh, profile_mesh, bracing_mesh, fit_camera: bool):
         """Apply mesh geometries to the scene with proper materials."""
@@ -1471,55 +1402,15 @@ class NarniaCurveViewer:
         self._clear_mesh_geometries()
         self._current_bbox = None
 
-        bbox = None
-        
-        # Result mesh (typically the boolean operation result)
-        if result_mesh is not None:
-            self._result_mesh = result_mesh
-            r_mat = rendering.MaterialRecord()
-            r_mat.shader = "defaultLit"
-            r_mat.base_color = [0.9, 0.9, 0.9, 1.0]
-            self._scene_widget.scene.add_geometry("result_mesh", result_mesh, r_mat)
-            try:
-                bbox = result_mesh.get_axis_aligned_bounding_box()
-            except Exception:
-                bbox = None
-        
-        # Profile mesh
-        if profile_mesh is not None:
-            self._profile_mesh = profile_mesh
-            p_mat = rendering.MaterialRecord()
-            p_mat.shader = "defaultLit"
-            p_mat.base_color = [0.8, 0.8, 0.8, 1.0]
-            self._scene_widget.scene.add_geometry("profile_mesh", profile_mesh, p_mat)
-            try:
-                pb = profile_mesh.get_axis_aligned_bounding_box()
-                if bbox is None:
-                    bbox = pb
-                else:
-                    min_b = np.minimum(bbox.min_bound, pb.min_bound)
-                    max_b = np.maximum(bbox.max_bound, pb.max_bound)
-                    bbox = o3d.geometry.AxisAlignedBoundingBox(min_b, max_b)
-            except Exception:
-                pass
+        # Store meshes in instance variables
+        self._result_mesh = result_mesh
+        self._profile_mesh = profile_mesh
+        self._bracing_mesh = bracing_mesh
 
-        # Bracing mesh
-        if bracing_mesh is not None:
-            self._bracing_mesh = bracing_mesh
-            b_mat = rendering.MaterialRecord()
-            b_mat.shader = "defaultLit"
-            b_mat.base_color = [0.1, 0.7, 0.95, 1.0]
-            self._scene_widget.scene.add_geometry("bracing_mesh", bracing_mesh, b_mat)
-            try:
-                gb = bracing_mesh.get_axis_aligned_bounding_box()
-                if bbox is None:
-                    bbox = gb
-                else:
-                    min_b = np.minimum(bbox.min_bound, gb.min_bound)
-                    max_b = np.maximum(bbox.max_bound, gb.max_bound)
-                    bbox = o3d.geometry.AxisAlignedBoundingBox(min_b, max_b)
-            except Exception:
-                pass
+        # Use helper to add geometries and get bbox
+        bbox = mesh_build.apply_mesh_geometries(
+            self._scene_widget, result_mesh, profile_mesh, bracing_mesh
+        )
 
         self._current_bbox = bbox
         if fit_camera and bbox is not None:
@@ -1655,8 +1546,10 @@ class NarniaCurveViewer:
                         state.profile_mesh_cache = profile_mesh
                         if profile_mesh:
                             details.append(f"profile: {len(profile_mesh.vertices)} verts")
+                        else:
+                            details.append(f"profile: returned None (iso={iso_p:.3f}, slices={state.profile.shape[0] if state.profile is not None else 'N/A'})")
                     except Exception as e:
-                        details.append(f"profile: {e}")
+                        details.append(f"profile: ERROR {e}")
 
             # Generate Bracing Mesh
             if self._mesh_chk_bracing.checked:
@@ -1683,8 +1576,10 @@ class NarniaCurveViewer:
                         state.bracing_mesh_cache = bracing_mesh
                         if bracing_mesh:
                             details.append(f"bracing: {len(bracing_mesh.vertices)} verts")
+                        else:
+                            details.append(f"bracing: returned None (iso={iso_b:.3f}, slices={bracing_fields.shape[0] if bracing_fields is not None else 'N/A'})")
                     except Exception as e:
-                        details.append(f"bracing: {e}")
+                        details.append(f"bracing: ERROR {e}")
 
             # Update cache params
             state.mesh_params_cache = params

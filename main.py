@@ -2,7 +2,7 @@ import json
 import os
 from pathlib import Path
 import numpy as np
-import core
+import core.sdf_operations as core
 import vis_utils as vut
 
 # --- CONFIGURATION ---
