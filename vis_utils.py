@@ -195,14 +195,34 @@ def slice_z(slice_index: int, num_fields: int, bounds_min, bounds_max) -> float:
 
 def interpolate_slices(field_data: np.ndarray, num_interpolations: int) -> np.ndarray:
     """
-    Interpolate between slices for smoother marching cubes results.
+    Interpolate between slices along Z-axis for smoother marching cubes results.
+    
+    Uses linear interpolation (scipy.ndimage.zoom) to insert additional slices
+    between existing ones, improving mesh quality for datasets with sparse Z-sampling.
     
     Args:
-        field_data: 3D array (nz, ny, nx)
-        num_interpolations: number of slices to insert between each pair
+        field_data: 3D scalar field array with shape (nz, ny, nx)
+                   - nz: number of original slices
+                   - ny, nx: spatial dimensions of each slice
+        num_interpolations: Number of new slices to insert between each pair of
+                           existing slices. Total new slices = nz + (nz-1)*num_interpolations
+                           Example: 10 slices with num_interpolations=2 → 28 slices
     
     Returns:
-        Interpolated 3D array with more slices along Z axis
+        Interpolated 3D array with shape (new_nz, ny, nx) where:
+        new_nz = nz + (nz - 1) * num_interpolations
+        Returns original array unchanged if num_interpolations <= 0 or field_data is None
+    
+    Example:
+        >>> field = np.random.rand(10, 50, 50)  # 10 slices
+        >>> interpolated = interpolate_slices(field, num_interpolations=2)
+        >>> interpolated.shape
+        (28, 50, 50)  # 10 + (10-1)*2 = 28 slices
+    
+    Note:
+        - Uses order=1 (linear) interpolation for speed and stability
+        - Only interpolates along Z-axis; XY dimensions remain unchanged
+        - Recommended num_interpolations: 1-5 for most datasets
     """
     if field_data is None or num_interpolations <= 0:
         return field_data
@@ -220,15 +240,41 @@ def interpolate_slices(field_data: np.ndarray, num_interpolations: int) -> np.nd
 def reconstruct_3d_grid(field_data_2d: np.ndarray, nx: int, ny: int, 
                         bounds_min: np.ndarray, bounds_max: np.ndarray) -> dict:
     """
-    Reconstruct 3D volume from stacked 2D slices.
+    Reconstruct 3D volume from stacked 2D scalar field slices.
+    
+    Converts flattened 2D slice data into a proper 3D volume array with
+    spatial metadata (spacing, origin) required for marching cubes meshing.
     
     Args:
-        field_data_2d: 2D array (num_slices, nx*ny)
-        nx, ny: grid dimensions
-        bounds_min, bounds_max: spatial bounds [x, y, z]
+        field_data_2d: 2D array with shape (num_slices, nx*ny)
+                      Each row is a flattened 2D slice of the scalar field
+        nx: Number of grid points in X direction (columns)
+        ny: Number of grid points in Y direction (rows)
+        bounds_min: Spatial bounds minimum [x_min, y_min, z_min]
+        bounds_max: Spatial bounds maximum [x_max, y_max, z_max]
     
     Returns:
-        dict with 'volume', 'spacing', 'origin'
+        Dictionary containing:
+        - 'volume': 3D numpy array (num_slices, ny, nx) - reshaped scalar field
+        - 'spacing': Tuple (dz, dy, dx) - voxel spacing in each dimension
+        - 'origin': List [x0, y0, z0] - origin point for coordinate system
+        
+        Returns None if field_data_2d is None
+    
+    Example:
+        >>> field_2d = np.random.rand(20, 2500)  # 20 slices, 50x50 grid
+        >>> bounds_min = np.array([0, 0, 0])
+        >>> bounds_max = np.array([100, 100, 10])
+        >>> grid_data = reconstruct_3d_grid(field_2d, 50, 50, bounds_min, bounds_max)
+        >>> grid_data['volume'].shape
+        (20, 50, 50)
+        >>> grid_data['spacing']
+        (0.526..., 2.04..., 2.04...)  # (dz, dy, dx)
+    
+    Note:
+        - Spacing is calculated as: dz = (z_max - z_min) / (num_slices - 1)
+        - Spacing format (dz, dy, dx) matches scikit-image marching_cubes convention
+        - Origin is set to bounds_min for proper world-space coordinates
     """
     if field_data_2d is None:
         return None
@@ -256,16 +302,51 @@ def generate_mesh_marching_cubes(volume: np.ndarray, spacing: Tuple[float, float
                                  origin: Tuple[float, float, float], 
                                  iso_level: float = 0.0) -> Optional[Tuple[np.ndarray, np.ndarray]]:
     """
-    Generate mesh using marching cubes algorithm.
+    Generate triangle mesh from 3D scalar field using marching cubes algorithm.
+    
+    Uses scikit-image's marching_cubes implementation to extract an iso-surface
+    from a 3D volume at a specified threshold level. Handles coordinate system
+    transformations to convert from scikit-image's (Z,Y,X) convention to
+    standard (X,Y,Z) world coordinates.
     
     Args:
-        volume: 3D scalar field (nz, ny, nx)
-        spacing: (dz, dy, dx) voxel spacing
-        origin: (x0, y0, z0) origin offset
-        iso_level: iso-surface value
+        volume: 3D scalar field array with shape (nz, ny, nx)
+               Values represent the scalar field at each voxel
+        spacing: Voxel spacing as (dz, dy, dx) tuple
+                Controls the physical size of each voxel in world units
+                Example: (0.5, 2.0, 2.0) means dz=0.5, dy=2.0, dx=2.0
+        origin: World-space origin as (x0, y0, z0) tuple
+               Offset to apply to all vertex coordinates
+               Example: (100, 50, 0) shifts mesh to start at x=100, y=50, z=0
+        iso_level: Iso-surface threshold value (default: 0.0)
+                  Vertices will be placed where volume == iso_level
+                  Typical range: -1.0 to 1.0 for normalized SDFs
     
     Returns:
-        (vertices, faces) or None if failed
+        Tuple of (vertices, faces) where:
+        - vertices: (N, 3) array of vertex positions in world coordinates (X,Y,Z)
+        - faces: (M, 3) array of triangle indices (zero-based)
+        
+        Returns None if marching cubes fails (e.g., no iso-surface found)
+    
+    Example:
+        >>> volume = np.random.rand(20, 50, 50)
+        >>> spacing = (0.5, 2.0, 2.0)
+        >>> origin = (0, 0, 0)
+        >>> result = generate_mesh_marching_cubes(volume, spacing, origin, iso_level=0.5)
+        >>> if result:
+        ...     vertices, faces = result
+        ...     print(f"Mesh: {len(vertices)} vertices, {len(faces)} triangles")
+    
+    Note:
+        - scikit-image returns vertices in (Z,Y,X) order, this function converts to (X,Y,Z)
+        - Spacing must match the order (dz, dy, dx) from reconstruct_3d_grid()
+        - If no iso-surface exists at the given level, returns None
+        - Typical execution time: 50-500ms depending on volume size
+    
+    References:
+        - Lorensen & Cline (1987): "Marching Cubes: A High Resolution 3D Surface Construction Algorithm"
+        - scikit-image documentation: https://scikit-image.org/docs/stable/api/skimage.measure.html#marching-cubes
     """
     try:
         from skimage import measure

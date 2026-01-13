@@ -286,6 +286,10 @@ class NarniaCurveViewer:
         
         self._mesh_panel.add_child(row_m_height)
         self._mesh_panel.add_child(row_m_interp)
+        
+        # Slice count info
+        self._mesh_slice_info = gui.Label("")
+        self._mesh_panel.add_child(self._mesh_slice_info)
         self._mesh_panel.add_fixed(10)
         
         # Individual Iso Overrides
@@ -425,6 +429,9 @@ class NarniaCurveViewer:
         self._btn_load_custom_npz.set_on_clicked(self._on_load_custom_npz)
         self._slice_slider.set_on_value_changed(self._on_slice_changed)
         self._tabs.set_on_selected_tab_changed(self._on_tab_changed)
+        
+        # Wire Z interpolation slider for live slice count update
+        self._mesh_interp_slider.set_on_value_changed(self._on_z_interp_changed)
 
         # Sync axis inset as the user navigates the main viewport.
         self._scene_widget.set_on_mouse(self._on_mouse)
@@ -475,6 +482,8 @@ class NarniaCurveViewer:
             self._clear_curve_geometries()
             # Try to show cached meshes from current source
             self._refresh_mesh_from_cache()
+            # Update slice count if data available
+            self._on_z_interp_changed(self._mesh_interp_slider.int_value)
             if self._profile_mesh is None and self._bracing_mesh is None and self._result_mesh is None:
                 self._status.text = "Mesh view. Select source and generate meshes."
             return
@@ -996,6 +1005,34 @@ class NarniaCurveViewer:
         if state.result is None:
             return
         self._update_scene(fit_camera=False)
+    
+    def _on_z_interp_changed(self, value):
+        """Update slice count info when Z interpolation changes."""
+        if self._tabs.selected_tab_index != self._mesh_tab_index:
+            return
+        
+        source_text = self._mesh_source_combo.get_item(self._mesh_source_combo.selected_index)
+        if source_text == "Compute":
+            state = self.compute_state
+        elif source_text == "NPZ Viewer":
+            state = self.viewer_state
+        elif source_text.startswith("Custom"):
+            state = self.custom_state
+        else:
+            return
+        
+        if state.result is None:
+            self._mesh_slice_info.text = ""
+            return
+        
+        original_slices = state.result.shape[0]
+        z_interp = int(value)
+        final_slices = original_slices + (original_slices - 1) * z_interp
+        
+        if z_interp > 0:
+            self._mesh_slice_info.text = f"{final_slices} slices (×{z_interp + 1} interp)"
+        else:
+            self._mesh_slice_info.text = f"{final_slices} slices (no interp)"
 
     def _compute_from_paths(self, bracing_json_path: str, profile_json_path: str):
         self._status.text = "Loading profile data..."
