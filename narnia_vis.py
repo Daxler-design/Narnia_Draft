@@ -9,7 +9,7 @@ from open3d.visualization import gui
 from open3d.visualization import rendering
 
 import core
-import core.sdf_operations as sdf
+import core
 import vis_utils as vut
 from gui import widgets as vwg
 from gui import mesh_builders as mesh_build
@@ -1241,7 +1241,7 @@ class NarniaCurveViewer:
 
         # 1. Main Curves
         slice_2d = res[idx].reshape((ny, nx))
-        curves = sdf.iso_curves_for_slice_2d(slice_2d, inputs["iso"], X, Y)
+        curves = core.iso_curves_for_slice_2d(slice_2d, inputs["iso"], X, Y)
         
         # No filtering/simplification
 
@@ -1257,7 +1257,7 @@ class NarniaCurveViewer:
         # 2. Profile Curves
         if inputs["prof"] is not None:
             p_slice_2d = inputs["prof"][idx].reshape((ny, nx))
-            p_curves = sdf.iso_curves_for_slice_2d(p_slice_2d, inputs["iso_p"], X, Y)
+            p_curves = core.iso_curves_for_slice_2d(p_slice_2d, inputs["iso_p"], X, Y)
             p_ls = vut.curves_to_lineset(p_curves, z)
             if p_ls is not None:
                 p_mat = rendering.MaterialRecord()
@@ -1269,7 +1269,7 @@ class NarniaCurveViewer:
         # 3. Bracing Curves
         if inputs["brac"] is not None:
             b_slice_2d = inputs["brac"][idx].reshape((ny, nx))
-            b_curves = sdf.iso_curves_for_slice_2d(b_slice_2d, inputs["iso_b"], X, Y)
+            b_curves = core.iso_curves_for_slice_2d(b_slice_2d, inputs["iso_b"], X, Y)
             # No filtering/simplification
             b_ls = vut.curves_to_lineset(b_curves, z)
             if b_ls is not None:
