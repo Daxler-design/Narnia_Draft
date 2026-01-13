@@ -66,7 +66,13 @@ def generate_centroids(mask: np.ndarray, k: int = 3, prev_centroids: Optional[np
             return np.array([[ny/2, nx/2]] * k)
 
     if prev_centroids is not None:
-        kmeans = KMeans(n_clusters=k, init=prev_centroids, n_init=1, random_state=seed)
+        # Validate prev_centroids shape
+        if prev_centroids.shape[0] == k:
+            # Perfect match - use as init
+            kmeans = KMeans(n_clusters=k, init=prev_centroids, n_init=1, random_state=seed)
+        else:
+            # Mismatch - don't use warm start, let k-means++ handle it
+            kmeans = KMeans(n_clusters=k, init='k-means++', n_init=10, random_state=seed)
     else:
         kmeans = KMeans(n_clusters=k, init='k-means++', n_init=10, random_state=seed)
         
@@ -340,7 +346,7 @@ def generate_bracing_keyfield_blend(profile_fields_2d, iso_level, nx, ny, keys_c
     return bracing_fields
 
 
-def compute_k_from_area(mask: np.ndarray, area_per_seed: float, k_min: int = 2, k_max: int = 12) -> int:
+def compute_k_from_area(mask: np.ndarray, area_per_seed: float, k_min: int = 1, k_max: int = 12) -> int:
     """
     Compute optimal number of centroids based on mask area.
     
@@ -355,7 +361,7 @@ def compute_k_from_area(mask: np.ndarray, area_per_seed: float, k_min: int = 2, 
     
     Example:
         >>> mask = np.ones((100, 100), dtype=bool)  # 10000 px²
-        >>> k = compute_k_from_area(mask, area_per_seed=2000, k_min=2, k_max=10)
+        >>> k = compute_k_from_area(mask, area_per_seed=2000, k_min=1, k_max=10)
         >>> k
         5  # 10000 / 2000 = 5 centroids
     
@@ -378,8 +384,8 @@ def generate_bracing_adaptive(
     iso_level: float,
     nx: int,
     ny: int,
-    area_per_seed: float = 1500.0,
-    k_min: int = 2,
+    area_per_seed: float = 600.0,
+    k_min: int = 1,
     k_max: int = 12,
     seed: int = 42,
     smooth_sigma: float = 1.5,
@@ -430,10 +436,26 @@ def generate_bracing_adaptive(
     
     # Step 1: Compute k-schedule based on area
     k_schedule = np.zeros(num_slices, dtype=int)
+    areas = np.zeros(num_slices)  # Track areas for debugging
     for z in range(num_slices):
         slice_2d = profile_fields_2d[z].reshape((ny, nx))
         mask = get_profile_mask(slice_2d, iso_level)
+        areas[z] = np.sum(mask)
         k_schedule[z] = compute_k_from_area(mask, area_per_seed, k_min, k_max)
+    
+    # Diagnostic output
+    print(f"  Area range: [{areas.min():.0f}, {areas.max():.0f}] px²")
+    print(f"  Area mean: {areas.mean():.0f} px²")
+    print(f"  K-schedule range: [{k_schedule.min()}, {k_schedule.max()}]")
+    print(f"  K-schedule unique values: {np.unique(k_schedule)}")
+    
+    # Show where k changes (transitions)
+    k_changes = []
+    for z in range(1, num_slices):
+        if k_schedule[z] != k_schedule[z-1]:
+            k_changes.append(f"z{z-1}→z{z}: k={k_schedule[z-1]}→{k_schedule[z]}")
+    if k_changes:
+        print(f"  Transitions: {', '.join(k_changes[:5])}" + (" ..." if len(k_changes) > 5 else ""))
     
     max_k = int(k_schedule.max())
     if max_k == 0:
@@ -449,22 +471,48 @@ def generate_bracing_adaptive(
         if k_active == 0:
             continue
         
-        # Warm-start from previous slice
+        # Smart warm-start: handle k increases by positioning new centroids
         prev_centroids = None
         if z > 0 and k_schedule[z-1] > 0:
             prev_k = k_schedule[z-1]
-            if prev_k >= k_active:
-                # Same or fewer centroids → use subset
-                prev_centroids = all_centroids_rc[z-1, :k_active]
-            else:
-                # More centroids needed → use all previous + init new randomly
-                prev_centroids = all_centroids_rc[z-1, :prev_k]
+            prev_cents = all_centroids_rc[z-1, :prev_k]
+            prev_cents = prev_cents[~np.isnan(prev_cents[:, 0])]
+            
+            if len(prev_cents) > 0:
+                if k_active == prev_k:
+                    # Same k → use directly
+                    prev_centroids = prev_cents
+                elif k_active < prev_k:
+                    # Fewer centroids → use subset
+                    prev_centroids = prev_cents[:k_active]
+                else:
+                    # More centroids needed (k increased)
+                    # Strategy: Initialize new centroids at midpoints between existing ones
+                    coords = np.argwhere(mask)
+                    if len(coords) >= k_active:
+                        # Use previous centroids + find farthest points as seeds for new ones
+                        from scipy.spatial import cKDTree
+                        tree = cKDTree(prev_cents)
+                        
+                        # For each mask point, find distance to nearest existing centroid
+                        distances, _ = tree.query(coords)
+                        
+                        # Select new centroids from points far from existing ones
+                        num_new = k_active - prev_k
+                        if num_new > 0:
+                            # Get indices of farthest points
+                            farthest_indices = np.argsort(distances)[-num_new:]
+                            new_cents = coords[farthest_indices].astype(float)
+                            
+                            # Combine old + new
+                            prev_centroids = np.vstack([prev_cents, new_cents])
         
         centroids = generate_centroids(mask, k=k_active, prev_centroids=prev_centroids, seed=seed + z)
         centroids = constrain_centroids_to_mask(centroids, mask)
         all_centroids_rc[z, :k_active] = centroids
     
     # Step 3: Smooth centroid trajectories along Z with Gaussian filter
+    # This creates gradual position transitions even when k changes
     for i in range(max_k):
         for coord_idx in [0, 1]:  # r, c
             trajectory = all_centroids_rc[:, i, coord_idx].copy()
@@ -475,6 +523,7 @@ def generate_bracing_adaptive(
                 continue
             
             # Apply Gaussian smoothing only to valid range
+            # This ensures centroids don't "jump" when appearing/disappearing
             if smooth_sigma > 0:
                 # Replace NaNs with forward/backward fill for smoothing
                 filled = trajectory.copy()
@@ -540,6 +589,315 @@ def generate_bracing_adaptive(
         
         if z % 10 == 0:
             print(f"Generated adaptive bracing for slice {z}/{num_slices} (k={k_active})")
+    
+    return bracing_fields
+
+
+def compute_binary_k_schedule(areas: np.ndarray, area_per_cell: float, k_start: int = 2, k_max: int = 16) -> np.ndarray:
+    """
+    Compute binary k-schedule (powers of 2 only, Z-based progression).
+    
+    Args:
+        areas: Array of mask areas per slice (unused, kept for API compatibility)
+        area_per_cell: Unused (kept for API compatibility)
+        k_start: Starting k (must be power of 2, default: 2)
+        k_max: Maximum k (must be power of 2, default: 16)
+    
+    Returns:
+        k_schedule with values in [k_start, ..., k_max], only powers of 2
+        
+    Note:
+        - Z-based progression: k grows evenly from k_start to k_max over slices
+        - k only increases (no backwards merging)
+        - Example: 60 slices, k=2→16: z=0-14: k=2, z=15-29: k=4, z=30-44: k=8, z=45-59: k=16
+    """
+    import math
+    
+    # Validate powers of 2
+    def is_power_of_2(n):
+        return n > 0 and (n & (n - 1)) == 0
+    
+    if not is_power_of_2(k_start) or not is_power_of_2(k_max):
+        raise ValueError(f"k_start={k_start} and k_max={k_max} must be powers of 2")
+    
+    num_slices = len(areas)
+    k_schedule = np.full(num_slices, k_start, dtype=int)
+    
+    # Build list of k values (powers of 2 from k_start to k_max)
+    k_levels = []
+    k = k_start
+    while k <= k_max:
+        k_levels.append(k)
+        k *= 2
+    
+    num_levels = len(k_levels)
+    if num_levels == 1:
+        # No progression needed
+        return k_schedule
+    
+    # Distribute slices evenly across k levels
+    slices_per_level = num_slices / num_levels
+    
+    for z in range(num_slices):
+        level_idx = min(int(z / slices_per_level), num_levels - 1)
+        k_schedule[z] = k_levels[level_idx]
+    
+    return k_schedule
+
+
+def split_cell_symmetric(parent_pos: np.ndarray, mask: np.ndarray, offset: float = 5.0) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Split one parent cell into two children symmetrically.
+    
+    Args:
+        parent_pos: Parent position [y, x]
+        mask: Boolean mask (ny, nx)
+        offset: Distance offset for children (pixels)
+    
+    Returns:
+        (child1_pos, child2_pos) as [y,x] arrays
+        
+    Note:
+        - Children positioned offset pixels away from parent
+        - Direction: perpendicular to mask boundary (or random if centered)
+        - Ensures both children are inside mask
+    """
+    py, px = parent_pos
+    ny, nx = mask.shape
+    
+    # Try 4 symmetric directions: up/down, left/right
+    directions = [
+        (offset, 0),    # right
+        (-offset, 0),   # left
+        (0, offset),    # down
+        (0, -offset),   # up
+    ]
+    
+    # Find first valid pair
+    for dy, dx in directions:
+        c1 = np.array([py + dy, px + dx])
+        c2 = np.array([py - dy, px - dx])
+        
+        # Check both are in bounds and in mask
+        c1_valid = (0 <= c1[0] < ny and 0 <= c1[1] < nx and 
+                    mask[int(c1[0]), int(c1[1])])
+        c2_valid = (0 <= c2[0] < ny and 0 <= c2[1] < nx and 
+                    mask[int(c2[0]), int(c2[1])])
+        
+        if c1_valid and c2_valid:
+            return c1, c2
+    
+    # Fallback: diagonal
+    c1 = np.array([py + offset/1.4, px + offset/1.4])
+    c2 = np.array([py - offset/1.4, px - offset/1.4])
+    
+    # Clamp to mask bounds
+    c1[0] = np.clip(c1[0], 0, ny-1)
+    c1[1] = np.clip(c1[1], 0, nx-1)
+    c2[0] = np.clip(c2[0], 0, ny-1)
+    c2[1] = np.clip(c2[1], 0, nx-1)
+    
+    return c1, c2
+
+
+def generate_bracing_adaptive_binary(
+    profile_fields_2d: np.ndarray,
+    iso_level: float,
+    nx: int,
+    ny: int,
+    area_per_cell: float = 700.0,
+    k_start: int = 2,
+    k_max: int = 16,
+    seed: int = 42,
+    smooth_sigma: float = 1.5,
+    ramp_slices: int = 3,
+    split_offset: float = 5.0
+) -> np.ndarray:
+    """
+    Generate bracing with binary cell splitting (1→2→4→8→16).
+    
+    Cells split symmetrically like biological cell division when area
+    per cell exceeds threshold. Each parent creates 2 children positioned
+    symmetrically around the parent. k only increases (no backwards merging).
+    
+    Args:
+        profile_fields_2d: Profile scalar fields (num_slices, nx*ny)
+        iso_level: Threshold for profile mask
+        nx: Grid width
+        ny: Grid height
+        area_per_cell: Area threshold for cell splitting (default: 700px²)
+        k_start: Starting k, must be power of 2 (default: 2)
+        k_max: Maximum k, must be power of 2 (default: 16)
+        seed: Random seed
+        smooth_sigma: Gaussian sigma for Z-axis smoothing (default: 1.5)
+        ramp_slices: Birth transition ramp length (default: 3)
+        split_offset: Distance offset for child cells (default: 5.0 pixels)
+    
+    Returns:
+        Bracing fields array (num_slices, nx*ny) with Voronoi SDF
+    
+    Example:
+        >>> profile = np.random.rand(60, 2500) - 0.5
+        >>> bracing = generate_bracing_adaptive_binary(
+        ...     profile, 0.0, 50, 50, area_per_cell=700, k_start=2, k_max=8
+        ... )
+        >>> bracing.shape
+        (60, 2500)
+    
+    Note:
+        - k values are always powers of 2: [1, 2, 4, 8, 16, ...]
+        - Forward-only growth (no k decrease)
+        - Split events logged: "z=20: SPLIT 2→4"
+        - Children inherit parent positions with symmetric offset
+    """
+    from scipy.ndimage import gaussian_filter1d
+    
+    num_slices = profile_fields_2d.shape[0]
+    bracing_fields = np.zeros_like(profile_fields_2d)
+    
+    # Step 1: Compute areas and binary k-schedule
+    areas = np.zeros(num_slices)
+    for z in range(num_slices):
+        slice_2d = profile_fields_2d[z].reshape((ny, nx))
+        mask = get_profile_mask(slice_2d, iso_level)
+        areas[z] = np.sum(mask)
+    
+    k_schedule = compute_binary_k_schedule(areas, area_per_cell, k_start, k_max)
+    
+    # Diagnostic output
+    print(f"  K-schedule: {k_start} → {k_schedule.max()} (Z-based progression)")
+    print(f"  K progression: {np.unique(k_schedule)}")
+    
+    # Find split events
+    splits = []
+    for z in range(1, num_slices):
+        if k_schedule[z] > k_schedule[z-1]:
+            splits.append((z, k_schedule[z-1], k_schedule[z]))
+    
+    if splits:
+        split_strs = [f"z={z}: {k_prev}→{k_new}" for z, k_prev, k_new in splits[:5]]
+        print(f"  Split events: {', '.join(split_strs)}" + (" ..." if len(splits) > 5 else ""))
+    else:
+        print(f"  No splits (constant k={k_start})")
+    
+    max_k = int(k_schedule.max())
+    if max_k == 0:
+        return bracing_fields
+    
+    # Step 2: Initialize first slice with k_start centroids
+    all_centroids_rc = np.full((num_slices, max_k, 2), np.nan)
+    
+    slice_0 = profile_fields_2d[0].reshape((ny, nx))
+    mask_0 = get_profile_mask(slice_0, iso_level)
+    
+    # Initial k_start centroids using K-means
+    init_centroids = generate_centroids(mask_0, k=k_start, seed=seed)
+    all_centroids_rc[0, :k_start] = init_centroids
+    
+    # Step 3: Propagate centroids forward with binary splits
+    for z in range(1, num_slices):
+        slice_2d = profile_fields_2d[z].reshape((ny, nx))
+        mask = get_profile_mask(slice_2d, iso_level)
+        
+        k_prev = k_schedule[z-1]
+        k_curr = k_schedule[z]
+        
+        if k_curr == k_prev:
+            # No split - just propagate with minor adjustment
+            prev_cents = all_centroids_rc[z-1, :k_prev].copy()
+            
+            # Simple forward propagation (could add velocity later)
+            current_cents = prev_cents.copy()
+            
+            # Constrain to mask
+            for i in range(k_prev):
+                current_cents[i] = constrain_centroids_to_mask(
+                    current_cents[i:i+1], mask
+                )[0]
+            
+            all_centroids_rc[z, :k_curr] = current_cents
+            
+        else:
+            # SPLIT EVENT: k_prev → k_curr (k_curr = 2 * k_prev)
+            prev_cents = all_centroids_rc[z-1, :k_prev]
+            new_cents = np.zeros((k_curr, 2))
+            
+            # Each parent splits into 2 children
+            for i in range(k_prev):
+                parent = prev_cents[i]
+                child1, child2 = split_cell_symmetric(parent, mask, split_offset)
+                
+                new_cents[2*i] = child1
+                new_cents[2*i + 1] = child2
+            
+            # Constrain all to mask
+            new_cents = constrain_centroids_to_mask(new_cents, mask)
+            all_centroids_rc[z, :k_curr] = new_cents
+    
+    # Step 4: Smooth trajectories
+    for i in range(max_k):
+        for coord_idx in [0, 1]:
+            trajectory = all_centroids_rc[:, i, coord_idx].copy()
+            valid_mask = ~np.isnan(trajectory)
+            
+            if not np.any(valid_mask) or smooth_sigma <= 0:
+                continue
+            
+            # Fill NaNs for smoothing
+            filled = trajectory.copy()
+            valid_indices = np.where(valid_mask)[0]
+            if len(valid_indices) > 0:
+                first, last = valid_indices[0], valid_indices[-1]
+                
+                for z in range(first + 1, num_slices):
+                    if np.isnan(filled[z]):
+                        filled[z] = filled[z-1]
+                
+                for z in range(first - 1, -1, -1):
+                    if np.isnan(filled[z]):
+                        filled[z] = filled[z+1]
+                
+                smoothed = gaussian_filter1d(filled, sigma=smooth_sigma, mode='nearest')
+                smoothed[~valid_mask] = np.nan
+                all_centroids_rc[:, i, coord_idx] = smoothed
+    
+    # Step 5: Compute weights (ramp for newly born cells)
+    weights = np.zeros((num_slices, max_k))
+    birth_z = np.full(max_k, -1, dtype=int)
+    
+    # Track birth times
+    for z in range(num_slices):
+        k_curr = k_schedule[z]
+        for i in range(k_curr):
+            if not np.isnan(all_centroids_rc[z, i, 0]):
+                if birth_z[i] < 0:
+                    birth_z[i] = z
+                
+                age = z - birth_z[i]
+                weights[z, i] = min(1.0, (age + 1) / max(ramp_slices, 1))
+    
+    # Step 6: Generate Voronoi fields
+    for z in range(num_slices):
+        slice_2d = profile_fields_2d[z].reshape((ny, nx))
+        mask = get_profile_mask(slice_2d, iso_level)
+        k_active = k_schedule[z]
+        
+        if k_active == 0:
+            continue
+        
+        centroids_rc = all_centroids_rc[z, :k_active]
+        valid_centroids = centroids_rc[~np.isnan(centroids_rc[:, 0])]
+        
+        if len(valid_centroids) == 0:
+            continue
+        
+        w = weights[z, :k_active]
+        ridge = _compute_weighted_voronoi_ridge((ny, nx), valid_centroids, w)
+        ridge[~mask] = -9999
+        bracing_fields[z] = ridge.ravel()
+        
+        if z % 10 == 0:
+            print(f"  Generated binary bracing for slice {z}/{num_slices} (k={k_active})")
     
     return bracing_fields
 
