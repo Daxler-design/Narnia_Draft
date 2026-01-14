@@ -155,12 +155,13 @@ def constrain_centroids_to_mask(centroids: np.ndarray, mask: np.ndarray) -> np.n
     return np.array(constrained)
 
 
-def generate_bracing_static(profile_fields_2d, iso_level, nx, ny, k, seed=42):
+def generate_bracing_static(profile_fields_2d, iso_level, nx, ny, k, seed=42, sigma=None):
     """
     Generate static bracing fields based on profile fields centroids.
     
     Uses K-means clustering per slice with temporal coherence to create
-    Voronoi-based bracing patterns.
+    Voronoi-based bracing patterns. Optionally applies Ridge Response 
+    transformation for smoother, width-controlled ridges.
     
     Args:
         profile_fields_2d: Profile scalar fields (num_slices, nx*ny)
@@ -169,13 +170,16 @@ def generate_bracing_static(profile_fields_2d, iso_level, nx, ny, k, seed=42):
         ny: Grid height
         k: Number of centroids per slice
         seed: Random seed for K-means
+        sigma: Ridge width parameter (default: None = raw Voronoi SDF)
+               When set (e.g., 3.0), applies R = exp(-(V/sigma)^2) transformation.
+               Smaller sigma → narrower ridges, larger sigma → wider ridges.
     
     Returns:
-        Bracing fields array (num_slices, nx*ny) with Voronoi SDF values
+        Bracing fields array (num_slices, nx*ny) with Voronoi SDF or ridge values
     
     Example:
         >>> profile = np.random.rand(60, 2500) - 0.5
-        >>> bracing = generate_bracing_static(profile, 0.0, 50, 50, k=5)
+        >>> bracing = generate_bracing_static(profile, 0.0, 50, 50, k=5, sigma=3.0)
         >>> bracing.shape
         (60, 2500)
     
@@ -183,6 +187,7 @@ def generate_bracing_static(profile_fields_2d, iso_level, nx, ny, k, seed=42):
         - Centroids from previous slice used as initial guess for next slice
         - Prints progress every 10 slices
         - Centroids constrained to lie within profile mask
+        - With sigma: ridge response normalized by P95 inside mask
     """
     num_fields = profile_fields_2d.shape[0]
     bracing_fields = np.zeros_like(profile_fields_2d)
@@ -195,8 +200,21 @@ def generate_bracing_static(profile_fields_2d, iso_level, nx, ny, k, seed=42):
         centroids = generate_centroids(mask, k=k, prev_centroids=prev_centroids, seed=seed)
         centroids = constrain_centroids_to_mask(centroids, mask)
         
-        voronoi_sdf_flat = compute_voronoi_sdf((ny, nx), centroids)
-        bracing_fields[i] = voronoi_sdf_flat.ravel()
+        voronoi_sdf = compute_voronoi_sdf((ny, nx), centroids)
+        
+        # Apply ridge response transformation if sigma is provided
+        if sigma is not None and sigma > 0:
+            R = np.exp(- (voronoi_sdf / sigma)**2)
+            # Normalize by P95 inside mask
+            valid_vals = R[mask]
+            if valid_vals.size > 0:
+                p95 = np.percentile(valid_vals, 95)
+                if p95 > 1e-6:
+                    R = R / p95
+            voronoi_sdf = R
+        
+        voronoi_sdf[~mask] = -9999  # Mask out regions outside profile
+        bracing_fields[i] = voronoi_sdf.ravel()
         prev_centroids = centroids
         
         if i % 10 == 0:

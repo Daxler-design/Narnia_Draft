@@ -90,12 +90,19 @@ class NarniaCurveViewer:
         self._gen_options_container.add_child(self._gen_method_combo)
         self._gen_options_container.add_fixed(5)
 
-        # 1. Static Params (Num Centroids)
+        # 1. Static Params (Num Centroids + Ridge Width)
         self._static_params = gui.Vert(0, gui.Margins(0, 0, 0, 0))
         row_k, self._num_centroids_slider, self._num_centroids_edit = vwg.create_slider_row(
             "Num Centroids", 1, 6, 5, None, is_int=True
         )
         self._static_params.add_child(row_k)
+        self._static_params.add_fixed(5)
+        
+        # Ridge Width (Sigma)
+        row_static_sigma, self._static_sigma_slider, self._static_sigma_edit = vwg.create_slider_row(
+            "Ridge Width (Sigma)", 0.0, 15.0, 0.0, None
+        )
+        self._static_params.add_child(row_static_sigma)
         
         # 2. KeyBlending Params
         self._keyblending_params = gui.Vert(0, gui.Margins(0, 0, 0, 0))
@@ -1221,10 +1228,14 @@ class NarniaCurveViewer:
                     ramp_slices=binary_ramp_val
                 )
             else: # static-bracing (method_idx == 0)
+                sigma_val = self._static_sigma_edit.double_value
+                sigma_val = sigma_val if sigma_val > 0 else None  # None = raw Voronoi SDF
+                print(f"Static Bracing: k={k}, sigma={sigma_val}")
                 self.compute_state.bracing = core.generate_bracing_static(
                     self.compute_state.profile,
                     self.compute_state.iso_p_base or 0.0,
-                    nx, ny, k
+                    nx, ny, k,
+                    sigma=sigma_val
                 )
             
             self.compute_state.iso_b_base = 0.0
