@@ -163,7 +163,7 @@ Note: "Loading NPZ skips compute."
 
 **Local-only constraints:**
 - Bind to `127.0.0.1` (no multi-user auth).
-- Local file paths are allowed (trusted environment).
+- Local file path inputs only (trusted environment; no upload UI for MVP).
 
 ### Phase 3: WebUI MVP (1–2 weeks)
 
@@ -184,7 +184,7 @@ Note: "Loading NPZ skips compute."
 - Scalar field preview: slice-based texture rendering (2D slice in 3D plane)
 
 **State flow:**
-- UI collects parameters → calls API → stores results in local cache → renders.
+- UI collects parameters → calls API → stores results in local cache (memory + disk) → renders.
 
 ## 3) Deployment Notes (Local Only)
 
@@ -200,4 +200,3 @@ Note: "Loading NPZ skips compute."
 - Static bracing compute path is functional end-to-end.
 - Mesh/curve/field previews are visible and interactive.
 - Exports match current desktop output formats.
-

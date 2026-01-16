@@ -24,7 +24,7 @@ expose a stable API boundary over `core/` with clear request/response contracts.
 
 ## Decisions
 
-1. **Caching**: store intermediate results on disk (cache folder).
+1. **Caching**: hybrid (memory + disk fallback).
 2. **Cache location**: use `./output/webui_cache`.
 
 ## Next Steps After Approval

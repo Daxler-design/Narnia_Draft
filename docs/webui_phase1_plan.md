@@ -64,16 +64,13 @@ lock down a shared, reviewable specification before we build backend or frontend
 
 1. **Wireframe format**: Confirmed: text wireframe is sufficient for now.
 2. **Tab behavior**: Confirmed: keep the same tab structure (Compute / NPZ Viewer / Mesh).
-   - **UI-friendly suggestion**: consider adding collapsible groups within each tab
+   - **Decision**: add collapsible groups within each tab
      (e.g., “Postprocess Bracing”, “Boolean Operation”, “Mesh Smoothing”) to reduce scroll.
 3. **Preview composition**: Confirmed: keep the same behavior as the original GUI.
    - **State management suggestion**: centralize a single “active dataset” state and
      layer visibility toggles, rather than duplicating compute/viewer state. This allows
      a single source of truth for mesh/curves/slices and avoids inconsistent caching.
-4. **File access**: Prefer local file upload dialogs for better UX.
-   - **Implementation note**: keep the ability to input local paths for power users,
-     but add an upload UI that stores files in a local cache directory and uses the
-     cached path in API calls.
+4. **File access**: Use local path input fields only (no upload UI for MVP).
 
 ## Next Steps After Approval
 

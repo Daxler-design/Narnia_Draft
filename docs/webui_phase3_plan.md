@@ -13,8 +13,7 @@ only static bracing compute active.
    - Mesh + curves + field slice previews aligned with the existing GUI.
 
 3. **Local-only workflow**
-   - File uploads store into a local cache folder.
-   - Optional path input fields for power users.
+   - Use local path input fields (no uploads for MVP).
 
 ## Proposed Stack
 

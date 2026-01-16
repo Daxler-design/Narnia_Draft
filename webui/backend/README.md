@@ -1,8 +1,8 @@
 # Narnia WebUI Backend (Phase 2 Skeleton)
 
 This backend is a local-only FastAPI skeleton intended to support the WebUI MVP.
-Endpoints currently return placeholder payloads while the compute integration is wired
-up in later phases.
+Static bracing compute is wired to `core/`, while preview/mesh/export remain placeholders.
+The backend loads core modules directly to avoid requiring Open3D on the server.
 
 ## Run (Local)
 
@@ -17,3 +17,4 @@ uvicorn app:app --reload --host 127.0.0.1 --port 8000
 
 - Endpoints are intentionally minimal placeholders and will be connected to `core/`.
 - This service is designed for single-user local workflows.
+- Cache output is written to `./output/webui_cache`.
