@@ -62,16 +62,20 @@ lock down a shared, reviewable specification before we build backend or frontend
 
 ## Open Questions (Need Your Input)
 
-1. **Wireframe format**: Do you want a simple text wireframe (as above), or a diagram (PNG)?
-2. **Tab behavior**: Should WebUI preserve the same tab structure (Compute / NPZ Viewer / Mesh),
-   or can we merge panels into a single view with collapsible sections?
-3. **Preview composition**: For MVP, should the viewport show **mesh + curves + slice**
-   simultaneously, or should we have a selector to toggle modes?
-4. **File access**: Is it acceptable to keep local file-path inputs (like the desktop GUI),
-   or should the WebUI add file upload/select dialogs?
+1. **Wireframe format**: Confirmed: text wireframe is sufficient for now.
+2. **Tab behavior**: Confirmed: keep the same tab structure (Compute / NPZ Viewer / Mesh).
+   - **UI-friendly suggestion**: consider adding collapsible groups within each tab
+     (e.g., “Postprocess Bracing”, “Boolean Operation”, “Mesh Smoothing”) to reduce scroll.
+3. **Preview composition**: Confirmed: keep the same behavior as the original GUI.
+   - **State management suggestion**: centralize a single “active dataset” state and
+     layer visibility toggles, rather than duplicating compute/viewer state. This allows
+     a single source of truth for mesh/curves/slices and avoids inconsistent caching.
+4. **File access**: Prefer local file upload dialogs for better UX.
+   - **Implementation note**: keep the ability to input local paths for power users,
+     but add an upload UI that stores files in a local cache directory and uses the
+     cached path in API calls.
 
 ## Next Steps After Approval
 
 - Update `docs/webui_mvp_plan.md` if you approve changes to parity or layout.
 - Start Phase 2: define backend API skeleton + local runtime.
-
