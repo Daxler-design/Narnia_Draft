@@ -1,0 +1,259 @@
+@import url("https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap");
+
+:root {
+  --bg-1: #f7f1e8;
+  --bg-2: #e8ddcf;
+  --panel: #fff7ef;
+  --panel-strong: #f4e6d6;
+  --ink: #1f1a14;
+  --ink-soft: #4c4236;
+  --accent: #c4572f;
+  --accent-2: #1f6a74;
+  --stroke: #d7c6b6;
+  --shadow: 0 20px 40px rgba(35, 24, 16, 0.18);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: "Space Grotesk", "Trebuchet MS", sans-serif;
+  color: var(--ink);
+  background: radial-gradient(circle at top left, #fff8f1 0%, transparent 50%),
+    radial-gradient(circle at 20% 20%, #f5d9c9 0%, transparent 55%),
+    linear-gradient(135deg, var(--bg-1), var(--bg-2));
+}
+
+.app {
+  max-width: 1300px;
+  margin: 0 auto;
+  padding: 32px 24px 64px;
+  position: relative;
+}
+
+.app::after {
+  content: "";
+  position: absolute;
+  inset: 12% -10% auto auto;
+  width: 300px;
+  height: 300px;
+  border-radius: 50%;
+  background: rgba(31, 106, 116, 0.12);
+  filter: blur(0.5px);
+  z-index: -1;
+}
+
+.header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 32px;
+  animation: rise 0.6s ease-out;
+}
+
+.eyebrow {
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  font-size: 11px;
+  margin: 0 0 6px;
+  color: var(--accent-2);
+}
+
+h1 {
+  margin: 0 0 8px;
+  font-size: clamp(28px, 3vw, 42px);
+}
+
+.subhead {
+  margin: 0;
+  color: var(--ink-soft);
+}
+
+.status-card {
+  min-width: 220px;
+  padding: 16px 18px;
+  border-radius: 16px;
+  background: var(--panel);
+  border: 1px solid var(--stroke);
+  box-shadow: var(--shadow);
+}
+
+.label {
+  margin: 0;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+}
+
+.status {
+  margin: 6px 0 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: minmax(280px, 1fr) minmax(360px, 1.4fr);
+  gap: 24px;
+}
+
+.panel,
+.viewer {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.section {
+  background: var(--panel);
+  border: 1px solid var(--stroke);
+  border-radius: 18px;
+  padding: 18px 20px;
+  box-shadow: 0 18px 30px rgba(32, 18, 8, 0.08);
+  animation: fadeIn 0.6s ease-out;
+}
+
+h2 {
+  margin: 0 0 12px;
+  font-size: 18px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 12px;
+  font-size: 14px;
+}
+
+.field input,
+.field select {
+  border: 1px solid var(--stroke);
+  border-radius: 12px;
+  padding: 10px 12px;
+  font-size: 14px;
+  background: #fffdf9;
+  color: var(--ink);
+}
+
+.field.checkbox {
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+}
+
+.inline {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+button {
+  border: none;
+  border-radius: 12px;
+  padding: 12px 16px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+button.primary {
+  background: var(--accent);
+  color: #fff5ef;
+  box-shadow: 0 12px 20px rgba(196, 87, 47, 0.35);
+}
+
+button.ghost {
+  background: var(--panel-strong);
+  color: var(--ink);
+  border: 1px solid var(--stroke);
+}
+
+button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 12px 22px rgba(31, 26, 20, 0.18);
+}
+
+.meta {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.meta p {
+  margin: 4px 0 0;
+  font-weight: 600;
+}
+
+.preview {
+  position: relative;
+  min-height: 420px;
+  border-radius: 18px;
+  border: 1px solid var(--stroke);
+  background: #15100c;
+  overflow: hidden;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.03);
+}
+
+#fieldCanvas,
+#curveSvg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+#curveSvg path {
+  fill: none;
+  stroke-width: 1.5;
+}
+
+.curve-result {
+  stroke: #f5f2ea;
+}
+
+.curve-profile {
+  stroke: #ffb36a;
+}
+
+.curve-bracing {
+  stroke: #48b5c1;
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@media (max-width: 980px) {
+  .header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .grid {
+    grid-template-columns: 1fr;
+  }
+}

@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Narnia WebUI MVP</title>
+    <link rel="stylesheet" href="/ui/styles.css" />
+  </head>
+  <body>
+    <div class="app">
+      <header class="header">
+        <div>
+          <p class="eyebrow">Narnia WebUI MVP</p>
+          <h1>Compute + Preview Console</h1>
+          <p class="subhead">Static bracing, postprocess, boolean, and live slice preview.</p>
+        </div>
+        <div class="status-card">
+          <p class="label">Status</p>
+          <p id="statusText" class="status">Idle</p>
+        </div>
+      </header>
+
+      <div class="grid">
+        <section class="panel">
+          <div class="section">
+            <h2>Connection</h2>
+            <label class="field">
+              <span>API Base (optional)</span>
+              <input id="apiBase" type="text" placeholder="http://127.0.0.1:8000" />
+            </label>
+          </div>
+
+          <div class="section">
+            <h2>Compute</h2>
+            <label class="field">
+              <span>Profile JSON Path</span>
+              <input id="profilePath" type="text" value="D:/OneDrive/Work/ZahaWork/Research/Narnia/Narnia_Draft/alice_result/251120/ext/waveStackFields.json" />
+            </label>
+            <label class="field checkbox">
+              <input id="generateBracing" type="checkbox" checked />
+              <span>Generate Bracing</span>
+            </label>
+            <label class="field">
+              <span>Bracing JSON Path (if not generating)</span>
+              <input id="bracingPath" type="text" value="" />
+            </label>
+            <div class="inline">
+              <label class="field">
+                <span>Num Centroids</span>
+                <input id="numCentroids" type="number" min="1" max="6" value="5" />
+              </label>
+              <label class="field">
+                <span>Ridge Sigma</span>
+                <input id="ridgeSigma" type="number" min="0" max="15" step="0.1" value="0" />
+              </label>
+            </div>
+            <button id="computeBtn" class="primary">Run Static Bracing</button>
+          </div>
+
+          <div class="section">
+            <h2>Postprocess</h2>
+            <label class="field checkbox">
+              <input id="postprocessEnable" type="checkbox" checked />
+              <span>Enable Postprocess</span>
+            </label>
+            <div class="inline">
+              <label class="field">
+                <span>Close Radius</span>
+                <input id="closeRadius" type="number" min="0" max="6" step="0.1" value="2" />
+              </label>
+              <label class="field">
+                <span>Min Area</span>
+                <input id="minArea" type="number" min="0" max="2000" step="1" value="120" />
+              </label>
+            </div>
+            <label class="field">
+              <span>Temporal Window</span>
+              <input id="temporalWindow" type="number" min="1" max="5" step="1" value="3" />
+            </label>
+            <div class="inline">
+              <label class="field">
+                <span>Profile Offset</span>
+                <input id="profileOffset" type="number" min="-2" max="2" step="0.05" value="0" />
+              </label>
+              <label class="field">
+                <span>Bracing Offset</span>
+                <input id="bracingOffset" type="number" min="-2" max="2" step="0.05" value="0" />
+              </label>
+            </div>
+            <button id="postprocessBtn" class="ghost">Apply Postprocess</button>
+          </div>
+
+          <div class="section">
+            <h2>Boolean</h2>
+            <label class="field">
+              <span>Mode</span>
+              <select id="booleanMode">
+                <option value="difference" selected>difference</option>
+                <option value="union">union</option>
+                <option value="intersection">intersection</option>
+              </select>
+            </label>
+            <div class="inline">
+              <label class="field">
+                <span>Profile Offset</span>
+                <input id="booleanProfileOffset" type="number" min="-2" max="2" step="0.05" value="0" />
+              </label>
+              <label class="field">
+                <span>Bracing Offset</span>
+                <input id="booleanBracingOffset" type="number" min="-2" max="2" step="0.05" value="0" />
+              </label>
+            </div>
+            <label class="field">
+              <span>Result Iso</span>
+              <input id="resultIso" type="number" min="-2" max="2" step="0.05" value="0" />
+            </label>
+            <button id="booleanBtn" class="ghost">Apply Boolean</button>
+          </div>
+        </section>
+
+        <section class="viewer">
+          <div class="section">
+            <h2>Preview</h2>
+            <label class="field">
+              <span>Dataset ID</span>
+              <input id="datasetId" type="text" placeholder="generated after compute" />
+            </label>
+            <div class="inline">
+              <label class="field">
+                <span>Slice Index</span>
+                <input id="sliceIndex" type="number" min="0" step="1" value="0" />
+              </label>
+              <label class="field">
+                <span>Iso Threshold</span>
+                <input id="isoThreshold" type="number" step="0.05" value="0" />
+              </label>
+            </div>
+            <button id="previewBtn" class="primary">Load Preview</button>
+            <div class="meta">
+              <div>
+                <p class="label">Slice Count</p>
+                <p id="sliceCount">-</p>
+              </div>
+              <div>
+                <p class="label">Z Coord</p>
+                <p id="zCoord">-</p>
+              </div>
+              <div>
+                <p class="label">Curves</p>
+                <p id="curveCounts">-</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="preview">
+            <canvas id="fieldCanvas" width="600" height="600"></canvas>
+            <svg id="curveSvg" viewBox="0 0 600 600" preserveAspectRatio="xMidYMid meet"></svg>
+          </div>
+        </section>
+      </div>
+    </div>
+
+    <script type="module" src="/ui/app.js"></script>
+  </body>
+  </html>
