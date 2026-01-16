@@ -28,10 +28,9 @@ only static bracing compute active.
 - UI panels and controls mapped 1:1 to Phase 1 checklist
 - Basic preview rendering with placeholder data
 
-## Open Questions
+## Decisions
 
-1. Do you want the WebUI to open in a desktop shell (e.g., Electron) for a more
-   desktop-like feel, or should it remain browser-only?
+1. **Packaging**: browser-only (no Electron shell).
 
 ## Next Steps After Approval
 

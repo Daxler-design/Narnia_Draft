@@ -22,11 +22,10 @@ expose a stable API boundary over `core/` with clear request/response contracts.
 - `webui/backend/requirements.txt`.
 - `webui/backend/README.md` with run instructions.
 
-## Open Questions
+## Decisions
 
-1. Should the backend store intermediate results on disk (cache folder), or keep
-   everything in memory for MVP?
-2. For local uploads, where do you want cached files stored (e.g., `./output/webui_cache`)?
+1. **Caching**: store intermediate results on disk (cache folder).
+2. **Cache location**: use `./output/webui_cache`.
 
 ## Next Steps After Approval
 
