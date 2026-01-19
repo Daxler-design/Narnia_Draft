@@ -94,8 +94,9 @@ def compute_voronoi_sdf(shape: Tuple[int, int], centroids: np.ndarray) -> np.nda
     
     Returns:
         2D array (ny, nx) with Voronoi SDF values
-        - Positive values near cell boundaries (ridges)
-        - Near zero at points closest to a single centroid
+        - Negative values near cell boundaries (ridges = material)
+        - Positive values inside cells (void)
+        - Zero at the ridge boundary surface
     
     Example:
         >>> centroids = np.array([[10, 10], [40, 40], [10, 40]])
@@ -113,7 +114,9 @@ def compute_voronoi_sdf(shape: Tuple[int, int], centroids: np.ndarray) -> np.nda
     grid_points = np.stack([Y.ravel(), X.ravel()], axis=-1)
     tree = cKDTree(centroids)
     dists, _ = tree.query(grid_points, k=2)
-    sdf_flat = dists[:, 1] - dists[:, 0]
+    # Convert to SDF: negate so ridges (d2≈d1) become negative (material)
+    # Add small thickness (0.5) so ridge centers are at -0.5
+    sdf_flat = -(dists[:, 1] - dists[:, 0]) + 0.5
     return sdf_flat.reshape(shape)
 
 
@@ -210,6 +213,8 @@ def generate_bracing_static(profile_fields_2d, iso_level, nx, ny, k, seed=42, si
         # Apply ridge response transformation if sigma is provided
       
         if sigma is not None and sigma > 0:
+            # voronoi_sdf already has proper SDF sign from compute_voronoi_sdf
+            # Apply Ridge Response transformation
             R = np.exp(- (voronoi_sdf / sigma)**2)
             # Normalize by P95 inside mask
             valid_vals = R[mask]
@@ -217,7 +222,8 @@ def generate_bracing_static(profile_fields_2d, iso_level, nx, ny, k, seed=42, si
                 p95 = np.percentile(valid_vals, 95)
                 if p95 > 1e-6:
                     R = R / p95
-            voronoi_sdf = R
+            # Convert to SDF: ridges (R=1) should be negative (material)
+            voronoi_sdf = 0.5 - R
         
       
 
@@ -322,7 +328,7 @@ def generate_bracing_keyfield_blend(profile_fields_2d, iso_level, nx, ny, keys_c
     first_idx, first_k = sorted_keys[0]
     if first_idx > 0:
         R_first = get_key_field(first_idx, first_k)
-        B_first = R_first - tau
+        B_first = tau - R_first  # SDF: ridges (R=1) → negative (material)
         
         for i in range(first_idx):
              slice_mask = get_profile_mask(profile_fields_2d[i].reshape((ny, nx)), iso_level=iso_level)
@@ -356,8 +362,8 @@ def generate_bracing_keyfield_blend(profile_fields_2d, iso_level, nx, ny, keys_c
                 # Linear Blend (Lerp)
                 R_curr = (1.0 - t) * R_start + t * R_end
             
-            # Reconstruction B = R - tau
-            B_curr = R_curr - tau
+            # Reconstruction: SDF where ridges (R=1) are negative (material)
+            B_curr = tau - R_curr
             
             # Masking for current slice
             slice_mask = get_profile_mask(profile_fields_2d[curr_idx].reshape((ny, nx)), iso_level=iso_level)
@@ -371,7 +377,7 @@ def generate_bracing_keyfield_blend(profile_fields_2d, iso_level, nx, ny, keys_c
     # 3. Fill After Last Key
     last_idx, last_k = sorted_keys[-1]
     R_last = get_key_field(last_idx, last_k)
-    B_last = R_last - tau
+    B_last = tau - R_last  # SDF: ridges (R=1) → negative (material)
     
     for i in range(last_idx, num_fields):
         slice_mask = get_profile_mask(profile_fields_2d[i].reshape((ny, nx)), iso_level=iso_level)
@@ -954,7 +960,7 @@ def _compute_weighted_voronoi_ridge(shape: Tuple[int, int], centroids: np.ndarra
         weights: (k,) array of influence weights
     
     Returns:
-        Ridge field (ny, nx) where positive values are cell boundaries
+        Ridge field (ny, nx) as proper SDF (negative=material ridges, positive=void)
     """
     ny, nx = shape
     Y, X = np.meshgrid(np.arange(ny), np.arange(nx), indexing='ij')
@@ -979,6 +985,7 @@ def _compute_weighted_voronoi_ridge(shape: Tuple[int, int], centroids: np.ndarra
     d1 = sorted_dists[:, :, 0]
     d2 = sorted_dists[:, :, 1]
     
-    ridge = d2 - d1
+    # Convert to SDF: negate so ridges become negative (material)
+    ridge = -(d2 - d1) + 0.5
     return ridge
 
