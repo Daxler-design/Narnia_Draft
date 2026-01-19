@@ -100,7 +100,7 @@ class NarniaCurveViewer:
         
         # Ridge Width (Sigma)
         row_static_sigma, self._static_sigma_slider, self._static_sigma_edit = vwg.create_slider_row(
-            "Ridge Width (Sigma)", 0.0, 15.0, 0.0, None
+            "Ridge Width (Sigma)", 0.0, 5.0, 0.0, None
         )
         self._static_params.add_child(row_static_sigma)
         

@@ -256,3 +256,5 @@ def slice_z(slice_index: int, num_fields: int, bounds_min, bounds_max) -> float:
     if num_fields <= 1:
         return z0
     return z0 + (z1 - z0) * (slice_index / (num_fields - 1))
+
+

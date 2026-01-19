@@ -26,3 +26,6 @@ ENV/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Debug output
+debug_output/

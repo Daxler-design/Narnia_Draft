@@ -8,9 +8,11 @@ Functions for generating bracing patterns from profile scalar fields using:
 """
 
 import numpy as np
+import debug_utils as debug
 from sklearn.cluster import KMeans
 from scipy.spatial import cKDTree
 from typing import Tuple, Optional, List
+
 
 
 def get_profile_mask(field_2d: np.ndarray, iso_level: float = 0.0) -> np.ndarray:
@@ -192,7 +194,8 @@ def generate_bracing_static(profile_fields_2d, iso_level, nx, ny, k, seed=42, si
     num_fields = profile_fields_2d.shape[0]
     bracing_fields = np.zeros_like(profile_fields_2d)
     prev_centroids = None
-    
+
+
     for i in range(num_fields):
         slice_2d = profile_fields_2d[i].reshape((ny, nx))
         mask = get_profile_mask(slice_2d, iso_level=iso_level)
@@ -201,8 +204,11 @@ def generate_bracing_static(profile_fields_2d, iso_level, nx, ny, k, seed=42, si
         centroids = constrain_centroids_to_mask(centroids, mask)
         
         voronoi_sdf = compute_voronoi_sdf((ny, nx), centroids)
+
+
         
         # Apply ridge response transformation if sigma is provided
+      
         if sigma is not None and sigma > 0:
             R = np.exp(- (voronoi_sdf / sigma)**2)
             # Normalize by P95 inside mask
@@ -213,12 +219,24 @@ def generate_bracing_static(profile_fields_2d, iso_level, nx, ny, k, seed=42, si
                     R = R / p95
             voronoi_sdf = R
         
-        voronoi_sdf[~mask] = -9999  # Mask out regions outside profile
+      
+
+        # voronoi_sdf[~mask] = -9999  # Mask out regions outside profile
+        # debug output
+        # if i %10 == 0:
+        #     debug.output_debug_voronoi(voronoi_sdf, centroids, i)
+
         bracing_fields[i] = voronoi_sdf.ravel()
         prev_centroids = centroids
         
+        
+        
         if i % 10 == 0:
             print(f"Generated bracing for slice {i}/{num_fields}")
+            print("voronoi min/max:", voronoi_sdf.min(), voronoi_sdf.max())
+            
+            
+
             
     return bracing_fields
 
@@ -605,6 +623,9 @@ def generate_bracing_adaptive(
         ridge[~mask] = -9999  # Outside mask = solid
         bracing_fields[z] = ridge.ravel()
         
+        # Output debug images
+        debug.output_debug_voronoi(ridge, valid_centroids, z)
+        
         if z % 10 == 0:
             print(f"Generated adaptive bracing for slice {z}/{num_slices} (k={k_active})")
     
@@ -913,6 +934,9 @@ def generate_bracing_adaptive_binary(
         ridge = _compute_weighted_voronoi_ridge((ny, nx), valid_centroids, w)
         ridge[~mask] = -9999
         bracing_fields[z] = ridge.ravel()
+        
+        # Output debug images
+        debug.output_debug_voronoi(ridge, valid_centroids, z)
         
         if z % 10 == 0:
             print(f"  Generated binary bracing for slice {z}/{num_slices} (k={k_active})")

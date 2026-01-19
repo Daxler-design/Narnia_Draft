@@ -10,9 +10,131 @@ All other functions have been extracted to specialized modules:
 """
 
 import numpy as np
-
+import debug_utils as debug
+    
 
 def compute_sf_operation(
+    sf_A: np.ndarray,
+    sf_B: np.ndarray,
+    iso_level_A: float = 0.0,
+    iso_level_B: float = 0.0,
+    mode: str = "difference",
+    swap: bool = False
+) -> np.ndarray:
+    """
+    Compute boolean-like operations between two signed distance fields (SDFs).
+    
+    Performs CSG-style operations (union, intersection, difference) on scalar fields
+    using SDF convention where negative values represent interior and positive values
+    represent exterior. The iso-surface (boundary) occurs at value = 0.
+    
+    Args:
+        sf_A: First scalar field array (any shape)
+               SDF convention: negative = inside, positive = outside
+        sf_B: Second scalar field array (must match sf_A shape)
+               SDF convention: negative = inside, positive = outside
+        iso_level_A: Iso level for field A (default: 0.0)
+                    Values are shifted by this amount: A' = A - iso_level_A
+        iso_level_B: Iso level for field B (default: 0.0)
+                    Values are shifted by this amount: B' = B - iso_level_B
+        mode: Operation mode (case-insensitive):
+             - 'difference' / 'a_minus_b' / 'sub': Subtract B from A
+             - 'union' / 'or' / 'min': Combine A and B (largest volume)
+             - 'intersection' / 'and' / 'max': Overlap of A and B
+        swap: If True, swap A and B before operation (default: False)
+              Useful for computing "B minus A" with mode='difference'
+    
+    Returns:
+        Result scalar field with same shape as inputs
+        Output follows SDF convention (negative inside, positive outside)
+    
+    Operation Details:
+        After shifting by iso_levels, the operations are:
+        
+        1. Difference (A - B):
+           result = max(A, -B)
+           - Interior where A is inside AND B is outside
+           - Creates cavity by subtracting B's interior from A
+           
+        2. Union (A ∪ B):
+           result = min(A, B)
+           - Interior where A OR B is inside
+           - Combines both volumes
+           
+        3. Intersection (A ∩ B):
+           result = max(A, B)
+           - Interior where A AND B are both inside
+           - Only keeps overlapping region
+    
+    Examples:
+        >>> # Example 1: Subtract bracing from profile
+        >>> profile = np.random.rand(60, 2500) - 0.5
+        >>> bracing = np.random.rand(60, 2500) - 0.3
+        >>> result = compute_sf_operation(profile, bracing, 
+        ...                               iso_level_A=0.0, 
+        ...                               iso_level_B=0.0,
+        ...                               mode='difference')
+        >>> result.shape
+        (60, 2500)
+        
+        >>> # Example 2: Union of two overlapping volumes
+        >>> sphere_A = create_sphere_sdf(center=[0, 0, 0], radius=5)
+        >>> sphere_B = create_sphere_sdf(center=[3, 0, 0], radius=5)
+        >>> combined = compute_sf_operation(sphere_A, sphere_B, mode='union')
+        
+        >>> # Example 3: Intersection (boolean AND)
+        >>> intersection = compute_sf_operation(sphere_A, sphere_B, mode='intersection')
+        
+        >>> # Example 4: Swap for "B minus A"
+        >>> cavity = compute_sf_operation(sphere_A, sphere_B, 
+        ...                               mode='difference', swap=True)
+    
+    Note:
+        - Input fields are shifted by iso_levels BEFORE operation
+        - All modes preserve SDF properties (signed distance approximation)
+        - For best results, inputs should be true SDFs (distance to surface)
+        - Operation is performed element-wise (no spatial coupling)
+        - Output range depends on input ranges and operation type
+    
+    Raises:
+        ValueError: If sf_A and sf_B have different shapes
+        ValueError: If mode is not recognized
+    """
+    # Bolean difference operation for SDFs
+    # result_bracing = sdf_profile - (offset_sdf_profile - sdf_bracing)
+    # A = original profile SDF
+    # offset_A = offset_sdf_profile
+    # B = voronoi bracing SDF (brac)
+    A = sf_A
+    offset_A = np.asarray(sf_A, dtype=float) - iso_level_A
+    B = np.asarray(sf_B, dtype=float) - iso_level_B
+
+    # Debug output
+    num_vals = sf_A.shape[-1]
+    nx = ny = int(np.sqrt(num_vals))
+
+    debug._save_debug_A_offsetA_B(A, offset_A, B, nx, ny, slice_idx=20, tag=mode)
+
+    if A.shape != B.shape:
+        raise ValueError("Input scalar fields must have the same shape")
+
+    if swap:
+        A, B = B, A
+
+    m = mode.lower()
+    if m in ("difference", "a_minus_b", "sub"):
+        result = np.maximum(A, -B)
+    elif m in ("union", "or", "min"):
+        result = np.minimum(A, B)
+    elif m in ("intersection", "and", "max"):
+        result = np.maximum(A, B)
+    else:
+        raise ValueError(f"Unknown mode '{mode}'")
+
+    return result
+
+
+def compute_sf_operation_OLD(
     sf_A: np.ndarray,
     sf_B: np.ndarray,
     iso_level_A: float = 0.0,
