@@ -160,7 +160,7 @@ def constrain_centroids_to_mask(centroids: np.ndarray, mask: np.ndarray) -> np.n
     return np.array(constrained)
 
 
-def generate_bracing_static(profile_fields_2d, iso_level, nx, ny, k, seed=42, sigma=None):
+def generate_bracing_static(profile_fields_2d, iso_level, nx, ny, k, seed=42, sigma=None, normalize_range=True):
     """
     Generate static bracing fields based on profile fields centroids.
     
@@ -178,6 +178,8 @@ def generate_bracing_static(profile_fields_2d, iso_level, nx, ny, k, seed=42, si
         sigma: Ridge width parameter (default: None = raw Voronoi SDF)
                When set (e.g., 3.0), applies R = exp(-(V/sigma)^2) transformation.
                Smaller sigma → narrower ridges, larger sigma → wider ridges.
+        normalize_range: Apply P95 normalization to ridge response (default: True)
+                        When False, returns raw values for flexible post-processing.
     
     Returns:
         Bracing fields array (num_slices, nx*ny) with Voronoi SDF or ridge values
@@ -212,25 +214,27 @@ def generate_bracing_static(profile_fields_2d, iso_level, nx, ny, k, seed=42, si
         
         # Apply ridge response transformation if sigma is provided
       
-        if sigma is not None and sigma > 0:
-            # voronoi_sdf already has proper SDF sign from compute_voronoi_sdf
-            # Apply Ridge Response transformation
-            R = np.exp(- (voronoi_sdf / sigma)**2)
-            # Normalize by P95 inside mask
-            valid_vals = R[mask]
-            if valid_vals.size > 0:
-                p95 = np.percentile(valid_vals, 95)
-                if p95 > 1e-6:
-                    R = R / p95
+        # if sigma is not None and sigma > 0:
+        #     # voronoi_sdf already has proper SDF sign from compute_voronoi_sdf
+        #     # Apply Ridge Response transformation
+        #     R = np.exp(- (voronoi_sdf / sigma)**2)
+        #     # Optionally normalize by P95 inside mask
+        #     if normalize_range:
+        #         valid_vals = R[mask]
+        #         if valid_vals.size > 0:
+        #             p95 = np.percentile(valid_vals, 95)
+        #             if p95 > 1e-6:
+        #                 R = R / p95
             # Convert to SDF: ridges (R=1) should be negative (material)
-            voronoi_sdf = 0.5 - R
+            # voronoi_sdf = 0.5 - R
         
-      
+        # Convert to SDF: ridges (R=1) should be negative (material)
+        voronoi_sdf = 0.5 - voronoi_sdf
 
         # voronoi_sdf[~mask] = -9999  # Mask out regions outside profile
         # debug output
-        # if i %10 == 0:
-        #     debug.output_debug_voronoi(voronoi_sdf, centroids, i)
+        if i %10 == 0:
+            debug.output_debug_voronoi(voronoi_sdf, centroids, i)
 
         bracing_fields[i] = voronoi_sdf.ravel()
         prev_centroids = centroids
@@ -247,7 +251,7 @@ def generate_bracing_static(profile_fields_2d, iso_level, nx, ny, k, seed=42, si
     return bracing_fields
 
 
-def generate_bracing_keyfield_blend(profile_fields_2d, iso_level, nx, ny, keys_config, smooth=0.0, seed=42, sigma=5.0, tau=0.5, beta=4.0):
+def generate_bracing_keyfield_blend(profile_fields_2d, iso_level, nx, ny, keys_config, smooth=0.0, seed=42, sigma=5.0, tau=0.5, beta=4.0, normalize_range=True):
     """
     Generate bracing fields by blending Voronoi fields between key slices.
     
@@ -266,6 +270,8 @@ def generate_bracing_keyfield_blend(profile_fields_2d, iso_level, nx, ny, keys_c
         sigma: Ridge width parameter (default: 5.0)
         tau: Ridge threshold offset (default: 0.5)
         beta: Exponential blend softness (default: 4.0, use 0 for linear)
+        normalize_range: Apply P95 normalization to ridge response (default: True)
+                        When False, returns raw values for flexible post-processing.
     
     Returns:
         Bracing fields array (num_slices, nx*ny) with blended ridge values
@@ -314,12 +320,13 @@ def generate_bracing_keyfield_blend(profile_fields_2d, iso_level, nx, ny, keys_c
         # 2. Convert to Ridge Response R
         R = np.exp(- (V / sigma)**2)
         
-        # 3. Normalize R based on P95 inside mask
-        valid_vals = R[mask]
-        if valid_vals.size > 0:
-            p95 = np.percentile(valid_vals, 95)
-            if p95 > 1e-6:
-                R = R / p95
+        # 3. Optionally normalize R based on P95 inside mask
+        if normalize_range:
+            valid_vals = R[mask]
+            if valid_vals.size > 0:
+                p95 = np.percentile(valid_vals, 95)
+                if p95 > 1e-6:
+                    R = R / p95
 
         key_fields_cache[cache_key] = R
         return R
@@ -629,8 +636,7 @@ def generate_bracing_adaptive(
         ridge[~mask] = -9999  # Outside mask = solid
         bracing_fields[z] = ridge.ravel()
         
-        # Output debug images
-        debug.output_debug_voronoi(ridge, valid_centroids, z)
+
         
         if z % 10 == 0:
             print(f"Generated adaptive bracing for slice {z}/{num_slices} (k={k_active})")
@@ -941,8 +947,7 @@ def generate_bracing_adaptive_binary(
         ridge[~mask] = -9999
         bracing_fields[z] = ridge.ravel()
         
-        # Output debug images
-        debug.output_debug_voronoi(ridge, valid_centroids, z)
+       
         
         if z % 10 == 0:
             print(f"  Generated binary bracing for slice {z}/{num_slices} (k={k_active})")

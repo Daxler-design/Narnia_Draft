@@ -24,7 +24,7 @@ def compute_sf_operation(
     """
     Compute boolean-like operations between two signed distance fields (SDFs).
     
-    Performs CSG-style operations (union, intersection, difference) on scalar fields
+    Performs CSG-style operations (union, intersection) and custom difference on scalar fields
     using SDF convention where negative values represent interior and positive values
     represent exterior. The iso-surface (boundary) occurs at value = 0.
     
@@ -38,7 +38,7 @@ def compute_sf_operation(
         iso_level_B: Iso level for field B (default: 0.0)
                     Values are shifted by this amount: B' = B - iso_level_B
         mode: Operation mode (case-insensitive):
-             - 'difference' / 'a_minus_b' / 'sub': Subtract B from A
+             - 'difference' / 'a_minus_b' / 'sub': Subtract offset fields
              - 'union' / 'or' / 'min': Combine A and B (largest volume)
              - 'intersection' / 'and' / 'max': Overlap of A and B
         swap: If True, swap A and B before operation (default: False)
@@ -52,18 +52,20 @@ def compute_sf_operation(
         After shifting by iso_levels, the operations are:
         
         1. Difference (A - B):
-           result = max(A, -B)
-           - Interior where A is inside AND B is outside
-           - Creates cavity by subtracting B's interior from A
+           result = sf_A - ((sf_A - iso_level_A) - sf_B)
+                  = iso_level_A + sf_B
+           - Custom formula: result depends on iso_level_A and bracing field only
+           - Does NOT use iso_level_B for bracing in difference mode
+           - Result is independent of actual profile SDF values
            
         2. Union (A ∪ B):
-           result = min(A, B)
-           - Interior where A OR B is inside
+           result = min(A - iso_level_A, B - iso_level_B)
+           - Standard CSG union with both offsets applied
            - Combines both volumes
            
         3. Intersection (A ∩ B):
-           result = max(A, B)
-           - Interior where A AND B are both inside
+           result = max(A - iso_level_A, B - iso_level_B)
+           - Standard CSG intersection with both offsets applied
            - Only keeps overlapping region
     
     Examples:
@@ -100,33 +102,37 @@ def compute_sf_operation(
         ValueError: If sf_A and sf_B have different shapes
         ValueError: If mode is not recognized
     """
-    # Bolean difference operation for SDFs
-    # result_bracing = sdf_profile - (offset_sdf_profile - sdf_bracing)
-    # A = original profile SDF
-    # offset_A = offset_sdf_profile
-    # B = voronoi bracing SDF (brac)
-    A = sf_A
-    offset_A = np.asarray(sf_A, dtype=float) - iso_level_A
+    # Apply iso-level offsets to both fields
+    A = np.asarray(sf_A, dtype=float) - iso_level_A
     B = np.asarray(sf_B, dtype=float) - iso_level_B
 
-    # Debug output
-    num_vals = sf_A.shape[-1]
-    nx = ny = int(np.sqrt(num_vals))
 
-    debug._save_debug_A_offsetA_B(A, offset_A, B, nx, ny, slice_idx=20, tag=mode)
 
-    if A.shape != B.shape:
+    if sf_A.shape != sf_B.shape:
         raise ValueError("Input scalar fields must have the same shape")
 
+    # Handle swap
     if swap:
         A, B = B, A
 
     m = mode.lower()
     if m in ("difference", "a_minus_b", "sub"):
+        # Standard CSG difference: A - B
+        # Points inside A (A<0) but outside B (B>0) remain
+        # Points inside both get removed
         result = np.maximum(A, -B)
+        
+        # Debug output
+        num_vals = sf_A.shape[-1]
+        nx = ny = int(np.sqrt(num_vals))
+        debug._save_debug_A_offsetA_B(sf_A, A, result, nx, ny, slice_idx=20, tag=mode)
     elif m in ("union", "or", "min"):
+        # Standard CSG union: A ∪ B
+        # Interior where either A or B is inside
         result = np.minimum(A, B)
     elif m in ("intersection", "and", "max"):
+        # Standard CSG intersection: A ∩ B
+        # Interior only where both A and B are inside
         result = np.maximum(A, B)
     else:
         raise ValueError(f"Unknown mode '{mode}'")
