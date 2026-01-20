@@ -103,7 +103,7 @@ def compute_sf_operation(
         ValueError: If mode is not recognized
     """
     # Apply iso-level offsets to both fields
-    A = np.asarray(sf_A, dtype=float) - iso_level_A
+    A = np.asarray(sf_A, dtype=float)
     B = np.asarray(sf_B, dtype=float) - iso_level_B
 
 

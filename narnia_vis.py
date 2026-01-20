@@ -90,6 +90,13 @@ class NarniaCurveViewer:
         self._gen_options_container.add_child(self._gen_method_combo)
         self._gen_options_container.add_fixed(5)
 
+        # Profile Offset (Generation Only)
+        row_poff, self._profile_offset_slider, self._profile_offset_edit = vwg.create_slider_row(
+            "Profile Offset", -2.0, 2.0, 0.1, None
+        )
+        self._gen_options_container.add_child(row_poff)
+        self._gen_options_container.add_fixed(5)
+
         # 1. Static Params (Num Centroids + Ridge Width)
         self._static_params = gui.Vert(0, gui.Margins(0, 0, 0, 0))
         row_k, self._num_centroids_slider, self._num_centroids_edit = vwg.create_slider_row(
@@ -262,11 +269,6 @@ class NarniaCurveViewer:
         self._op_mode_combo.add_item("intersection")
         self._op_mode_combo.set_on_selection_changed(self._on_boolean_param_changed)
 
-        # Profile Offset
-        row_poff, self._profile_offset_slider, self._profile_offset_edit = vwg.create_slider_row(
-            "Profile Offset", -2.0, 2.0, 0.0, self._on_boolean_param_changed
-        )
-
         # Bracing Offset
         row_boff, self._bracing_offset_slider, self._bracing_offset_edit = vwg.create_slider_row(
             "Bracing Offset", -2.0, 2.0, 0.0, self._on_boolean_param_changed
@@ -291,13 +293,11 @@ class NarniaCurveViewer:
         self._compute_panel.add_child(gui.Label("--- Boolean Operation ---"))
         self._compute_panel.add_child(gui.Label("Mode"))
         self._compute_panel.add_child(self._op_mode_combo)
-        self._compute_panel.add_child(row_poff)
         self._compute_panel.add_child(row_boff)
         self._compute_panel.add_fixed(10)
         self._compute_panel.add_child(row_c_iso)
 
         self._tabs.add_tab("Compute", self._compute_panel)
-
         # --- TAB 2: NPZ VIEWER ---
         self._viewer_panel = gui.Vert(0, gui.Margins(10, 10, 10, 10))
         
@@ -656,7 +656,7 @@ class NarniaCurveViewer:
             state.bracing_clean = core.postprocess_bracing_fields(
                 state.bracing,
                 state.profile,
-                iso_profile=state.iso_p_base + self._profile_offset_slider.double_value,
+                iso_profile=state.iso_p_base,
                 iso_brace=state.iso_b_base + self._bracing_offset_slider.double_value,
                 close_radius=self._pp_close_slider.double_value,
                 min_area=self._pp_area_slider.double_value,
@@ -671,7 +671,7 @@ class NarniaCurveViewer:
 
     def _update_boolean_result(self):
         mode = self._op_mode_combo.get_item(self._op_mode_combo.selected_index)
-        off_p = self._profile_offset_slider.double_value
+        # off_p removed (now generation-only)
         off_b = self._bracing_offset_slider.double_value
 
         # Use bracing_clean if available, else fallback to bracing
@@ -680,7 +680,7 @@ class NarniaCurveViewer:
         self.compute_state.result = core.compute_sf_operation(
             self.compute_state.profile,
             brac,
-            iso_level_A=self.compute_state.iso_p_base + off_p,
+            iso_level_A=self.compute_state.iso_p_base,
             iso_level_B=self.compute_state.iso_b_base + off_b,
             mode=mode,
         )
@@ -1156,6 +1156,11 @@ class NarniaCurveViewer:
             k = int(self._num_centroids_slider.int_value)
             print(f"Generating bracing from centroids (k={k})...")
             
+            # Use generation-time profile offset
+            gen_offset = self._profile_offset_slider.double_value
+            iso_p_base = self.compute_state.iso_p_base or 0.0
+            iso_gen = iso_p_base + gen_offset
+            
             method_idx = self._gen_method_combo.selected_index
             if method_idx == 1: # Key-Field Blend
                 smooth_val = self._kb_slider.double_value
@@ -1178,7 +1183,7 @@ class NarniaCurveViewer:
                 print(f"Key-Field Blend: keys={keys_config}, smooth={smooth_val}, sigma={sigma_val}, tau={tau_val}, beta={beta_val}")
                 self.compute_state.bracing = core.generate_bracing_keyfield_blend(
                     self.compute_state.profile,
-                    self.compute_state.iso_p_base or 0.0,
+                    iso_gen,
                     nx, ny, 
                     keys_config=keys_config,
                     smooth=smooth_val,
@@ -1196,7 +1201,7 @@ class NarniaCurveViewer:
                 print(f"Shape-Adaptive: area={area_val}, k=[{kmin_val},{kmax_val}], smooth={smooth_sigma_val}, ramp={ramp_val}")
                 self.compute_state.bracing = core.generate_bracing_adaptive(
                     self.compute_state.profile,
-                    self.compute_state.iso_p_base or 0.0,
+                    iso_gen,
                     nx, ny,
                     area_per_seed=area_val,
                     k_min=kmin_val,
@@ -1217,7 +1222,7 @@ class NarniaCurveViewer:
                 print(f"Binary Splitting: k={k_start_val}→{k_max_val} (Z-based), offset={offset_val}, smooth={binary_smooth_val}, ramp={binary_ramp_val}")
                 self.compute_state.bracing = core.generate_bracing_adaptive_binary(
                     self.compute_state.profile,
-                    self.compute_state.iso_p_base or 0.0,
+                    iso_gen,
                     nx, ny,
                     area_per_cell=700.0,  # Unused but required by API
                     k_start=k_start_val,
@@ -1232,8 +1237,8 @@ class NarniaCurveViewer:
                 sigma_val = sigma_val if sigma_val > 0 else None  # None = raw Voronoi SDF
                 print(f"Static Bracing: k={k}, sigma={sigma_val}")
                 self.compute_state.bracing = core.generate_bracing_static(
-                    self.compute_state.profile + 0.1,
-                    self.compute_state.iso_p_base or 0.0,
+                    self.compute_state.profile,
+                    iso_gen,
                     nx, ny, k,
                     sigma=sigma_val
                 )
@@ -1325,9 +1330,9 @@ class NarniaCurveViewer:
             inputs["curve_color"] = [0.1, 0.7, 0.95, 1.0]
             
             # Offsets
-            off_p = self._profile_offset_slider.double_value
+            # off_p removed (generation only)
             off_b = self._bracing_offset_slider.double_value
-            inputs["iso_p"] = iso_p_base + off_p
+            inputs["iso_p"] = iso_p_base
             inputs["iso_b"] = iso_b_base + off_b
             
         else: # NPZ
@@ -1621,13 +1626,21 @@ class NarniaCurveViewer:
             use_cache = (state.mesh_params_cache == params)
             
             # Calculate iso levels with individual overrides
-            iso_r = state.iso_p_base + iso_override_result
-            iso_p = state.iso_p_base + iso_override_profile
-            iso_b = state.iso_b_base + iso_override_bracing
+            iso_r = 0.0
+            iso_p = state.iso_p_base
+            iso_b = state.iso_b_base
+
+            # DEBUG:
+            print(f"iso_r: {iso_r}, iso_p: {iso_p}, iso_b: {iso_b}")
+
             
             if source_text == "Compute":
-                iso_p += self._profile_offset_slider.double_value
-                iso_b += self._bracing_offset_slider.double_value
+                iso_r += iso_override_result
+                iso_p += iso_override_profile
+                iso_b += iso_override_bracing
+
+                print(f"if compute: iso_r: {iso_r}, iso_p: {iso_p}, iso_b: {iso_b}")
+            
 
             result_mesh = None
             profile_mesh = None
