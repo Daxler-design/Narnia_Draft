@@ -49,12 +49,12 @@ def _to_img(field: np.ndarray, nx: int, ny: int, slice_idx: int = 0) -> np.ndarr
     raise ValueError(f"Can't plot field: shape={field.shape}, expected (ny,nx)=({ny},{nx}) or (S,nx*ny).")
 
     
-def _save_debug_A_offsetA_B(A, offset_A, B, nx: int, ny: int, slice_idx: int = 0, tag: str = ""):
+def _save_debug_boolean_show(A, B, R, nx: int, ny: int, slice_idx: int = 0, tag: str = ""):
     debug_dir = (Path.cwd() / "debug_output").resolve()
     debug_dir.mkdir(parents=True, exist_ok=True)
 
     A_img = _to_img(A, nx, ny, slice_idx)
-    off_img = _to_img(offset_A, nx, ny, slice_idx)
+    R_img = _to_img(R, nx, ny, slice_idx)
     B_img = _to_img(B, nx, ny, slice_idx)
 
     fig, axs = plt.subplots(1, 3, figsize=(15, 5), constrained_layout=True)
@@ -63,15 +63,15 @@ def _save_debug_A_offsetA_B(A, offset_A, B, nx: int, ny: int, slice_idx: int = 0
     axs[0].set_title(f"A (raw)-slice {slice_idx}")
     fig.colorbar(im0, ax=axs[0], fraction=0.046, pad=0.04)
 
-    im1 = axs[1].imshow(off_img, cmap="magma", aspect="equal")
-    axs[1].set_title(f"offset_A = A - iso_level_A (slice {slice_idx})")
+    im1 = axs[1].imshow(B_img, cmap="magma", aspect="equal")
+    axs[1].set_title(f"B (slice {slice_idx})")
     fig.colorbar(im1, ax=axs[1], fraction=0.046, pad=0.04)
 
-    im2 = axs[2].imshow(B_img, cmap="magma", aspect="equal")
-    axs[2].set_title(f"B (offset) (slice {slice_idx})")
+    im2 = axs[2].imshow(R_img, cmap="magma", aspect="equal")
+    axs[2].set_title(f"Result (slice {slice_idx})")
     fig.colorbar(im2, ax=axs[2], fraction=0.046, pad=0.04)
 
-    out = debug_dir / f"debug_A_offsetA_B{('_'+tag) if tag else ''}_s{slice_idx:03d}.png"
+    out = debug_dir / f"Debug_boolean_show{('_'+tag) if tag else ''}_s{slice_idx:03d}.png"
     fig.savefig(out, dpi=150)
     plt.close(fig)
     print(f"DEBUG: wrote {out}")

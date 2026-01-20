@@ -124,9 +124,9 @@ def compute_sf_operation(
         # result = A - B
         
         # Debug output
-        num_vals = sf_A.shape[-1]
-        nx = ny = int(np.sqrt(num_vals))
-        debug._save_debug_A_offsetA_B(A, B, result, nx, ny, slice_idx=20, tag=mode)
+        # num_vals = sf_A.shape[-1]
+        # nx = ny = int(np.sqrt(num_vals))
+        # debug._save_debug_A_offsetA_B(A, B, result, nx, ny, slice_idx=20, tag=mode)
     elif m in ("union", "or", "min"):
         # Standard CSG union: A ∪ B
         # Interior where either A or B is inside
