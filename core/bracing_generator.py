@@ -196,56 +196,44 @@ def generate_bracing_static(profile_fields_2d, iso_level, nx, ny, k, seed=42, si
         - Centroids constrained to lie within profile mask
         - With sigma: ridge response normalized by P95 inside mask
     """
-    num_fields = profile_fields_2d.shape[0]
+    num_slices = profile_fields_2d.shape[0]
     bracing_fields = np.zeros_like(profile_fields_2d)
     prev_centroids = None
 
-
-    for i in range(num_fields):
+    for i in range(num_slices):
         slice_2d = profile_fields_2d[i].reshape((ny, nx))
         mask = get_profile_mask(slice_2d, iso_level=iso_level)
-        
+
         centroids = generate_centroids(mask, k=k, prev_centroids=prev_centroids, seed=seed)
         centroids = constrain_centroids_to_mask(centroids, mask)
-        
-        voronoi_sdf = compute_voronoi_sdf((ny, nx), centroids)
 
+        V = compute_voronoi_sdf((ny, nx), centroids)  # raw voronoi field
 
-        
-        # Apply ridge response transformation if sigma is provided
-      
-        # if sigma is not None and sigma > 0:
-        #     # voronoi_sdf already has proper SDF sign from compute_voronoi_sdf
-        #     # Apply Ridge Response transformation
-        #     R = np.exp(- (voronoi_sdf / sigma)**2)
-        #     # Optionally normalize by P95 inside mask
-        #     if normalize_range:
-        #         valid_vals = R[mask]
-        #         if valid_vals.size > 0:
-        #             p95 = np.percentile(valid_vals, 95)
-        #             if p95 > 1e-6:
-        #                 R = R / p95
-            # Convert to SDF: ridges (R=1) should be negative (material)
-            # voronoi_sdf = 0.5 - R
-        
-        # Convert to SDF: ridges (R=1) should be negative (material)
-        voronoi_sdf = 0.5 - voronoi_sdf
+        # turn Voronoi into brace field
+        if sigma is not None and sigma > 0:
+            R = np.exp(- (V / sigma) ** 2)
 
-        # voronoi_sdf[~mask] = -9999  # Mask out regions outside profile
-        # debug output
-        if i %10 == 0:
-            debug.output_debug_voronoi(voronoi_sdf, centroids, i)
+            if normalize_range:
+                valid_vals = R[mask]
+                if valid_vals.size:
+                    p95 = np.percentile(valid_vals, 95)
+                    if p95 > 1e-6:
+                        R = R / p95
 
-        bracing_fields[i] = voronoi_sdf.ravel()
+            brace_field = 0.5 - R   # negative near ridges after negation below
+        # else:
+        #     brace_field = V         # if you really want raw behavior
+
+        profile_slice = np.asarray(profile_fields_2d[i], dtype=float) + iso_level  
+        bracing_fields[i] = np.maximum(profile_slice, -brace_field.ravel())
+
         prev_centroids = centroids
-        
-        
-        
+
+        if i == 10:
+            debug.output_debug_voronoi(bracing_fields[i].reshape((ny, nx)), centroids, i)
+
         if i % 10 == 0:
-            print(f"Generated bracing for slice {i}/{num_fields}")
-            print("voronoi min/max:", voronoi_sdf.min(), voronoi_sdf.max())
-            
-            
+            print(f"Generated bracing for slice {i}/{num_slices}")
 
             
     return bracing_fields

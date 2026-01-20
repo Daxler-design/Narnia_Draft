@@ -100,7 +100,7 @@ class NarniaCurveViewer:
         
         # Ridge Width (Sigma)
         row_static_sigma, self._static_sigma_slider, self._static_sigma_edit = vwg.create_slider_row(
-            "Ridge Width (Sigma)", 0.0, 5.0, 0.0, None
+            "Ridge Width (Sigma)", 1.0, 5.0, 1.0, None
         )
         self._static_params.add_child(row_static_sigma)
         
@@ -1232,7 +1232,7 @@ class NarniaCurveViewer:
                 sigma_val = sigma_val if sigma_val > 0 else None  # None = raw Voronoi SDF
                 print(f"Static Bracing: k={k}, sigma={sigma_val}")
                 self.compute_state.bracing = core.generate_bracing_static(
-                    self.compute_state.profile,
+                    self.compute_state.profile + 0.1,
                     self.compute_state.iso_p_base or 0.0,
                     nx, ny, k,
                     sigma=sigma_val
