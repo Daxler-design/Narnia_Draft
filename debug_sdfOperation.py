@@ -2,7 +2,6 @@
 
 
 import numpy as np
-import core
 import debug_utils as debug
 import json
 from pathlib import Path
@@ -290,11 +289,6 @@ def compute_voronoi_ridge_sdf(shape: Tuple[int, int], centroids: np.ndarray, rid
 
 
 
-
-
-
-
-
 def voronoi_ridge_band_sdf_world(shape, centroids_px, bbox_min, bbox_max, sigma_world):
     ny, nx = shape
     xmin, ymin = float(bbox_min[0]), float(bbox_min[1])
@@ -330,76 +324,144 @@ def voronoi_ridge_band_sdf_world(shape, centroids_px, bbox_min, bbox_max, sigma_
 
 
 
-# # this method has problems with infinite ridges
-# def compute_voronoi_ridge_sdf_world(
-#     shape: Tuple[int, int],
-#     centroids: np.ndarray,                 # (k,2) in (y,x) pixel coords
-#     ridge_thickness: float = 1.0,          # if bbox provided: WORLD units; else: PIXEL units
-#     bbox_min: Optional[list] = None,       # [x,y,z]
-#     bbox_max: Optional[list] = None,       # [x,y,z]
-# ) -> np.ndarray:
-#     ny, nx = shape
+        
+def generate_bracing_cavity_static_world(sdf_profiles, iso_level_offset, nx, ny, k, seed=42, sigma_world=None, debug_interval=10, debugOutput=False):
+    """
+    Docstring for generate_bracing_cavity_static_world
+    
+    :param sdf_profiles: Original SDF profiles
+    2D array (num_slices, ny, nx)
+    :param iso_level_offset: world distance (only for true sdf) offset to apply to the original SDF profiles, positive value is offset inward
+    :param nx: shape x dimension,aligned with sdf_profiles
+    
+    :param ny: shape y dimension , aligned with sdf_profiles
+    :param k: centroid count per slice
+    :param seed: Random seed for centroid generation
+    :param sigma_world: real world units for voronoi ridge band thickness
+    :param debug_interval: Interval for debug output (in slices)
+    :param debugOutput: Whether to output debug plots
 
-#     # -----------------------
-#     # Choose coordinate system
-#     # -----------------------
-#     if bbox_min is None or bbox_max is None:
-#         # ===== Original behavior: PIXEL space =====
-#         # centroids are (y,x) but Euclidean points should be (x,y)
-#         pts = np.stack([centroids[:, 1], centroids[:, 0]], axis=1)  # (x,y) in pixels
+    :return: bracing cavities SDF profiles
+    """
+    
+    num_slice = len(sdf_profiles)
+    bracing_cavities_sdf = np.zeros((num_slice, ny, nx))
+    prev_centroids = None
+    for i in range(num_slice):
+        slice_2d = sdf_profiles[i]
+        
+        # use profile to creat mask
+        mask = slice_2d <= 0.0
 
-#         # Grid points in pixel coords (x,y)
-#         Y, X = np.indices((ny, nx))
-#         grid_points = np.stack([X.ravel(), Y.ravel()], axis=-1)      # (x,y) pixels
+        centroids = generate_centroids(mask, k=k, prev_centroids=None, seed=seed)
+        centroids = constrain_centroids_to_mask(centroids, mask)
+        
+        V= voronoi_ridge_band_sdf_world(slice_2d.shape,
+                                        centroids_px=centroids,
+                                        bbox_min=bbox_min,
+                                        bbox_max=bbox_max,
+                                        sigma_world=sigma_world)
+        
+        profile_slice_offset = slice_2d + iso_level_offset
+        bracing_cavity = np.maximum(profile_slice_offset, -V)
+        bracing_cavities_sdf[i] = bracing_cavity
 
-#         thickness = float(ridge_thickness)  # pixels
+        if debugOutput and (i % debug_interval ==0):
 
-#     else:
-#         # ===== World behavior: WORLD space =====
-#         xmin, ymin = float(bbox_min[0]), float(bbox_min[1])
-#         xmax, ymax = float(bbox_max[0]), float(bbox_max[1])
+            debug.output_debug_plot_world_offsets(
+            slice_2d, 
+            bbox_min=bbox_min, bbox_max=bbox_max, nx=nx, ny=ny, slice_idx=i,
+            offset_step_world=0.05,offset_max_world=0.5,
+            file_name_prefix="profile_sdf")
 
-#         # centroids: (y,x) pixel -> (x,y) world
-#         cx = xmin + (centroids[:, 1] / (nx - 1)) * (xmax - xmin)
-#         cy = ymin + (centroids[:, 0] / (ny - 1)) * (ymax - ymin)
-#         pts = np.stack([cx, cy], axis=1)  # (x,y) world
+            debug.output_debug_plot_world_offsets(
+            V, 
+            bbox_min=bbox_min, bbox_max=bbox_max, nx=nx, ny=ny, slice_idx=i,
+            offset_step_world=0.001,offset_max_world=0.001,
+            file_name_prefix="Voronoi_sdf")
 
-#         # Grid points: (row,col) -> (x,y) world
-#         xs = np.linspace(xmin, xmax, nx)
-#         ys = np.linspace(ymin, ymax, ny)
-#         Xw, Yw = np.meshgrid(xs, ys, indexing="xy")                 # (ny,nx)
-#         grid_points = np.stack([Xw.ravel(), Yw.ravel()], axis=-1)    # (x,y) world
+            
+            debug.output_debug_plot_world_offsets(
+                bracing_cavity, 
+                bbox_min=bbox_min, bbox_max=bbox_max, nx=nx, ny=ny, slice_idx=i,
+                centroids=centroids,
+                offset_step_world=0.01,
+                file_name_prefix="bracing_cavity_sdf")
 
-#         thickness = float(ridge_thickness)  # world units
+    return bracing_cavities_sdf
 
-#     # -----------------------
-#     # Voronoi + finite ridge segments
-#     # -----------------------
-#     # vor = Voronoi(pts)
-#     vor = Voronoi(pts, qhull_options="Qbb Qc Qx QJ")
 
-#     ridge_segments = []
-#     for ridge_vertices in vor.ridge_vertices:
-#         if -1 in ridge_vertices:
-#             continue
-#         v0 = vor.vertices[ridge_vertices[0]]  # (x,y)
-#         v1 = vor.vertices[ridge_vertices[1]]  # (x,y)
-#         ridge_segments.append((v0, v1))
 
-#     if not ridge_segments:
-#         return np.ones((ny, nx), dtype=float) * thickness
+# NOT-USE: this method has problems with infinite ridges
+def compute_voronoi_ridge_sdf_world(
+    shape: Tuple[int, int],
+    centroids: np.ndarray,                 # (k,2) in (y,x) pixel coords
+    ridge_thickness: float = 1.0,          # if bbox provided: WORLD units; else: PIXEL units
+    bbox_min: Optional[list] = None,       # [x,y,z]
+    bbox_max: Optional[list] = None,       # [x,y,z]
+) -> np.ndarray:
+    ny, nx = shape
 
-#     # -----------------------
-#     # Distance to nearest ridge segment
-#     # -----------------------
-#     min_dists = np.full(grid_points.shape[0], np.inf, dtype=float)
-#     for v0, v1 in ridge_segments:
-#         dists = point_to_segment_distance(grid_points, v0, v1)  # consistent (x,y)
-#         min_dists = np.minimum(min_dists, dists)
+    # -----------------------
+    # Choose coordinate system
+    # -----------------------
+    if bbox_min is None or bbox_max is None:
+        # ===== Original behavior: PIXEL space =====
+        # centroids are (y,x) but Euclidean points should be (x,y)
+        pts = np.stack([centroids[:, 1], centroids[:, 0]], axis=1)  # (x,y) in pixels
 
-#     # Signed distance: negative inside ridge (material), positive outside
-#     sdf = (min_dists - thickness).reshape((ny, nx))
-#     return sdf
+        # Grid points in pixel coords (x,y)
+        Y, X = np.indices((ny, nx))
+        grid_points = np.stack([X.ravel(), Y.ravel()], axis=-1)      # (x,y) pixels
+
+        thickness = float(ridge_thickness)  # pixels
+
+    else:
+        # ===== World behavior: WORLD space =====
+        xmin, ymin = float(bbox_min[0]), float(bbox_min[1])
+        xmax, ymax = float(bbox_max[0]), float(bbox_max[1])
+
+        # centroids: (y,x) pixel -> (x,y) world
+        cx = xmin + (centroids[:, 1] / (nx - 1)) * (xmax - xmin)
+        cy = ymin + (centroids[:, 0] / (ny - 1)) * (ymax - ymin)
+        pts = np.stack([cx, cy], axis=1)  # (x,y) world
+
+        # Grid points: (row,col) -> (x,y) world
+        xs = np.linspace(xmin, xmax, nx)
+        ys = np.linspace(ymin, ymax, ny)
+        Xw, Yw = np.meshgrid(xs, ys, indexing="xy")                 # (ny,nx)
+        grid_points = np.stack([Xw.ravel(), Yw.ravel()], axis=-1)    # (x,y) world
+
+        thickness = float(ridge_thickness)  # world units
+
+    # -----------------------
+    # Voronoi + finite ridge segments
+    # -----------------------
+    # vor = Voronoi(pts)
+    vor = Voronoi(pts, qhull_options="Qbb Qc Qx QJ")
+
+    ridge_segments = []
+    for ridge_vertices in vor.ridge_vertices:
+        if -1 in ridge_vertices:
+            continue
+        v0 = vor.vertices[ridge_vertices[0]]  # (x,y)
+        v1 = vor.vertices[ridge_vertices[1]]  # (x,y)
+        ridge_segments.append((v0, v1))
+
+    if not ridge_segments:
+        return np.ones((ny, nx), dtype=float) * thickness
+
+    # -----------------------
+    # Distance to nearest ridge segment
+    # -----------------------
+    min_dists = np.full(grid_points.shape[0], np.inf, dtype=float)
+    for v0, v1 in ridge_segments:
+        dists = point_to_segment_distance(grid_points, v0, v1)  # consistent (x,y)
+        min_dists = np.minimum(min_dists, dists)
+
+    # Signed distance: negative inside ridge (material), positive outside
+    sdf = (min_dists - thickness).reshape((ny, nx))
+    return sdf
 
 
 # ------------------------------------------------------------------------------
@@ -426,81 +488,30 @@ for i, sdf in enumerate(sdf_profiles):
             offset_step_world=0.05,offset_max_world=0.5,
             file_name_prefix="profile_sdf")
         
+# 2. generate bracing cavitys sdf profiles
+
+bracing_cavitys_sdf = generate_bracing_cavity_static_world(
+    sdf_profiles,
+    iso_level_offset=0.08,
+    nx=nx,
+    ny=ny,
+    k=5,
+    seed=42,
+    sigma_world=0.03,
+    debug_interval=10,
+    debugOutput=False)
 
 
-
-
-
-
-
-# Test if voronoi generation if a true sdf
-sigma_world = 0.03
-k = 5
-seed = 42
-# normalize_range = True
-iso_level_mask = 0.0
-
-# num_slices = profile_fields_2d.shape[0]
-
-bracing_fields = np.zeros((len(sdf_profiles), ny, nx)) 
-prev_centroids = None
-
-for i in range(len(sdf_profiles)): 
+# 3. output thin wall profile with bracing cavity sdf profiles
+for i in range(len(bracing_cavitys_sdf)):
     if i %10 ==0:
         slice_2d = sdf_profiles[i]
-        # use profile to creat mask
-        mask = slice_2d <= iso_level_mask
-
-        centroids = generate_centroids(mask, k=k, prev_centroids=prev_centroids, seed=seed)
-        centroids = constrain_centroids_to_mask(centroids, mask)
-        
-
-        # V = compute_voronoi_ridge_sdf_world(slice_2d.shape,
-        #                                     centroids=centroids,
-        #                                     ridge_thickness=sigma_world,
-        #                                     bbox_min=bbox_min,
-        #                                     bbox_max=bbox_max,)  # true voronoi sdf world units
-
-        V= voronoi_ridge_band_sdf_world(slice_2d.shape,
-                                        centroids_px=centroids,
-                                        bbox_min=bbox_min,
-                                        bbox_max=bbox_max,
-                                        sigma_world=sigma_world)
-
-        # prev_centroids = centroids         
-
-
-
-    
-        # debug.output_debug_voronoi(V, centroids, i)
-        debug.output_debug_voronoi(V, centroids, i)
-        debug.output_debug_plot_world_offsets(
-            V, 
-            bbox_min=bbox_min, bbox_max=bbox_max, nx=nx, ny=ny, slice_idx=i,
-            offset_step_world=0.001,offset_max_world=0.001,
-            file_name_prefix="Voronoi_sdf")
-        
-
-        
-        
-
-        profile_slice_offset = slice_2d + 0.01
-        bracing_cavity = np.maximum(profile_slice_offset, -V)
+        bracing_cavity = bracing_cavitys_sdf[i]
         bracing_slice = np.maximum(slice_2d, -bracing_cavity)
 
         debug.output_debug_plot_world_offsets(
             bracing_slice, 
             bbox_min=bbox_min, bbox_max=bbox_max, nx=nx, ny=ny, slice_idx=i,
-            centroids=centroids,
             offset_step_world=0.01,
+            show_offset=False,
             file_name_prefix="bracing_field")
-
-        
-        
-        
-
-
-
-
-        
-

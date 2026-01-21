@@ -141,6 +141,7 @@ def output_debug_plot_world_offsets(
     save_dir=None,
     dpi=200,
     file_name_prefix="plot",
+    show_offset=True,
 ):
     """
     Plot an SDF with contours that correspond to exact world-space offsets.
@@ -157,6 +158,7 @@ def output_debug_plot_world_offsets(
         save_dir: folder path; defaults to ./debug_output next to this file.
         dpi: save dpi.
         file_name_prefix: optional prefix for the saved filename.
+        show_offset: if True, draw multiple offset contours; if False, only draw level=0.
     """
     if centroids is None:
         centroids = np.empty((0, 2), dtype=float)
@@ -202,6 +204,9 @@ def output_debug_plot_world_offsets(
         neg_levels = -pos_levels
         levels = np.r_[neg_levels[::-1], 0.0, pos_levels]  # increasing overall
 
+    if not show_offset:
+        levels = np.array([0.0])
+
     # Setup figure
     fig, axs = plt.subplots(1, 2, figsize=(14, 6))
     # print(f"DEBUG: offset contours at world distances: {levels[-2:]}")
@@ -235,6 +240,7 @@ def output_debug_plot_world_offsets(
         linewidths=0.6, alpha=0.8,
         extent=[xmin, xmax, ymin, ymax], origin="lower"
     )
+    
     axs[1].set_title("|∇phi| (world spacing) + same offset contours")
     axs[1].set_xlabel("X (world)")
     axs[1].set_ylabel("Y (world)")
