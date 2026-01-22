@@ -100,8 +100,6 @@ def load_sdf_list_from_inshapes(json_path, nx=256, ny=256, branch_index=0):
     polys = data["shapes"][branch_index]["polys"]
     sdfs = [poly_to_true_sdf(poly, bbox_min, bbox_max, nx=nx, ny=ny) for poly in polys]
     return sdfs
-
-
 def interpolate_true_sdf_profiles_world(
     sdf_profiles: List[np.ndarray],
     bbox_min: List[float],
@@ -161,7 +159,6 @@ def interpolate_true_sdf_profiles_world(
         new_stack[i] = _redistance(interp) if redistance else interp
 
     return new_stack
-
 
 
 
@@ -626,11 +623,18 @@ with open("alice_result/inShapes.json", 'r') as f:
 nx = 512
 ny = 512
 sdf_profiles = load_sdf_list_from_inshapes("alice_result/inShapes.json", nx=nx, ny=ny, branch_index=0)
-
-# pre-intepolate to target number of slices
-target_num_slices = 100
-
 print(f"Loaded {len(sdf_profiles)} SDF profiles from inShapes.json \n")
+# pre-intepolate to target number of slices
+# target_num_slices = 100
+# sdf_profiles = interpolate_true_sdf_profiles_world(
+#     sdf_profiles,
+#     bbox_min=bbox_min,
+#     bbox_max=bbox_max,
+#     target_count=target_num_slices,
+#     redistance=True
+# )
+
+print(f"Loaded {len(sdf_profiles)} SDF profiles interpolated \n")
 for i, sdf in enumerate(sdf_profiles):
     if i % 10 == 0:
         # check sdf profiles and contours
