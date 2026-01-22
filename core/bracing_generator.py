@@ -982,3 +982,185 @@ def _compute_weighted_voronoi_ridge(shape: Tuple[int, int], centroids: np.ndarra
     ridge = -(d2 - d1) + 0.5
     return ridge
 
+
+def voronoi_ridge_band_sdf_world(shape, centroids_px, bbox_min, bbox_max, sigma_world):
+    """
+    Generate Voronoi ridge band SDF with world-unit ridge thickness.
+    
+    Creates ridge patterns at Voronoi cell boundaries with true world-unit distances
+    using EDT. Unlike pixel-based compute_voronoi_sdf, this function operates in
+    world coordinates for accurate dimensional control.
+    
+    Args:
+        shape: Output field shape (ny, nx)
+        centroids_px: Centroid positions (k, 2) in pixel coordinates [y, x]
+        bbox_min: Bounding box minimum [x, y, z] in world units
+        bbox_max: Bounding box maximum [x, y, z] in world units
+        sigma_world: Ridge thickness in world units (e.g., 0.03 meters)
+    
+    Returns:
+        2D SDF array (ny, nx) with world-unit signed distances
+        - Negative values: inside ridge (material)
+        - Positive values: outside ridge (void)
+        - Zero: on ridge boundary
+    
+    Example:
+        >>> centroids = np.array([[64, 64], [192, 192]])  # Pixel coords
+        >>> bbox_min, bbox_max = [0, 0, 0], [10, 10, 10]  # Meters
+        >>> sdf = voronoi_ridge_band_sdf_world((256, 256), centroids, bbox_min, bbox_max, 0.05)
+        >>> sdf.shape
+        (256, 256)
+    
+    Note:
+        - Transforms centroids from pixel to world coordinates
+        - Computes ridge band mask where d2 - d1 < sigma_world
+        - Uses EDT with world-unit sampling for accurate distances
+        - Output is true SDF with |∇SDF| ≈ 1
+    """
+    from scipy.ndimage import distance_transform_edt
+    
+    ny, nx = shape
+    xmin, ymin = float(bbox_min[0]), float(bbox_min[1])
+    xmax, ymax = float(bbox_max[0]), float(bbox_max[1])
+    dx = (xmax - xmin) / (nx - 1)
+    dy = (ymax - ymin) / (ny - 1)
+
+    # Transform centroids: pixel (y,x) → world (x,y)
+    cx = xmin + (centroids_px[:, 1] / (nx - 1)) * (xmax - xmin)
+    cy = ymin + (centroids_px[:, 0] / (ny - 1)) * (ymax - ymin)
+    pts = np.stack([cx, cy], axis=1)  # (k, 2) in world (x,y)
+
+    # Grid in world coordinates
+    xs = np.linspace(xmin, xmax, nx)
+    ys = np.linspace(ymin, ymax, ny)
+    Xw, Yw = np.meshgrid(xs, ys, indexing="xy")  # Match debug script exactly
+    grid = np.stack([Xw.ravel(), Yw.ravel()], axis=-1)  # (ny*nx, 2)
+
+    # Compute distances to all centroids in world space
+    tree = cKDTree(pts)
+    dists, _ = tree.query(grid, k=min(2, len(pts)))
+    
+    if len(pts) == 1:
+        # Only one centroid → no ridges
+        return np.ones((ny, nx), dtype=float) * sigma_world
+    
+    # Extract distances (grid is already flattened, so dists is (ny*nx, 2))
+    d1 = dists[:, 0]  # Distance to nearest
+    d2 = dists[:, 1]  # Distance to 2nd nearest
+    
+    # Ridge band: where d2 - d1 <= 2 * sigma_world (match debug script EXACTLY)
+    band = (d2 - d1) <= (2.0 * sigma_world)
+    band = band.reshape((ny, nx))
+    
+    # EDT on ridge band with world-unit sampling
+    dist_in = distance_transform_edt(band, sampling=(dy, dx))
+    dist_out = distance_transform_edt(~band, sampling=(dy, dx))
+    
+    # Signed distance: negative inside ridge, positive outside
+    phi = dist_out - dist_in
+    return phi
+
+
+def generate_bracing_cavity_static_world(
+    sdf_profiles, 
+    bbox_min,
+    bbox_max,
+    iso_level_offset, 
+    nx, 
+    ny, 
+    k, 
+    seed=42, 
+    sigma_world=None, 
+    debug_interval=10, 
+    debugOutput=False
+):
+    """
+    Generate bracing cavities from true SDF profiles using world-unit parameters.
+    
+    Creates static Voronoi bracing patterns with world-unit offsets and ridge widths.
+    Designed for true SDF inputs (from poly_to_true_sdf) with dimensional accuracy.
+    
+    Args:
+        sdf_profiles: List of true SDF arrays (each ny, nx) from polylines
+        bbox_min: Bounding box minimum [x, y, z] in world units
+        bbox_max: Bounding box maximum [x, y, z] in world units
+        iso_level_offset: Profile shrink distance in world units (e.g., 0.08 m)
+                         Positive = shrink inward, negative = expand outward
+        nx: Grid width
+        ny: Grid height
+        k: Number of Voronoi centroids per slice
+        seed: Random seed for K-means
+        sigma_world: Ridge thickness in world units (e.g., 0.03 m)
+                    If None, uses raw Voronoi SDF without ridge band
+        debug_interval: Print progress every N slices (default: 10)
+        debugOutput: Enable debug visualization (default: False)
+    
+    Returns:
+        Bracing cavity SDF array (num_slices, ny, nx)
+        - Negative values: bracing material (cavities to subtract from profile)
+        - Positive values: void
+    
+    Example:
+        >>> from core import load_sdf_list_from_inshapes, generate_bracing_cavity_static_world
+        >>> sdfs = load_sdf_list_from_inshapes("alice_result/inShapes.json", 256, 256)
+        >>> bbox_min, bbox_max = [0, 0, 0], [10, 10, 10]
+        >>> bracing = generate_bracing_cavity_static_world(
+        ...     sdfs, bbox_min, bbox_max, iso_offset=0.08, nx=256, ny=256, k=5, sigma_world=0.03
+        ... )
+        >>> bracing.shape
+        (59, 256, 256)
+    
+    Note:
+        - Reuses generate_centroids and constrain_centroids_to_mask from core
+        - Applies iso_level_offset to shrink profile before generating centroids
+        - Uses voronoi_ridge_band_sdf_world for world-unit ridge thickness
+        - Output is ready for SDF boolean operations
+    """
+    num_slice = len(sdf_profiles)
+    bracing_cavities_sdf = np.zeros((num_slice, ny, nx))
+    prev_centroids = None
+    
+    for i in range(num_slice):
+        slice_2d = sdf_profiles[i]
+        
+        # use profile to creat mask
+        mask = slice_2d <= 0.0
+
+        centroids = generate_centroids(mask, k=k, prev_centroids=None, seed=seed)
+        centroids = constrain_centroids_to_mask(centroids, mask)
+        
+        V= voronoi_ridge_band_sdf_world(slice_2d.shape,
+                                        centroids_px=centroids,
+                                        bbox_min=bbox_min,
+                                        bbox_max=bbox_max,
+                                        sigma_world=sigma_world)
+        
+        profile_slice_offset = slice_2d + iso_level_offset
+        bracing_cavity = np.maximum(profile_slice_offset, -V)
+        bracing_cavities_sdf[i] = bracing_cavity
+
+        if debugOutput and (i % debug_interval ==0):
+
+            debug.output_debug_plot_world_offsets(
+            slice_2d, 
+            bbox_min=bbox_min, bbox_max=bbox_max, nx=nx, ny=ny, slice_idx=i,
+            offset_step_world=0.05,offset_max_world=0.5,
+            file_name_prefix="profile_sdf")
+
+            debug.output_debug_plot_world_offsets(
+            V, 
+            bbox_min=bbox_min, bbox_max=bbox_max, nx=nx, ny=ny, slice_idx=i,
+            offset_step_world=0.001,offset_max_world=0.001,
+            file_name_prefix="Voronoi_sdf")
+
+            
+            debug.output_debug_plot_world_offsets(
+                bracing_cavity, 
+                bbox_min=bbox_min, bbox_max=bbox_max, nx=nx, ny=ny, slice_idx=i,
+                centroids=centroids,
+                offset_step_world=0.01,
+                file_name_prefix="bracing_cavity_sdf")
+    
+    
+    return bracing_cavities_sdf
+

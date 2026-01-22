@@ -5,8 +5,12 @@ Functions for loading scalar field data from JSON, inferring grid dimensions,
 and extracting metadata.
 """
 
+import json
 import numpy as np
+from pathlib import Path
 from typing import Dict, Tuple, List, Optional, Any
+from matplotlib.path import Path as MplPath
+from scipy.ndimage import distance_transform_edt
 
 
 def stack_scalar_fields(data_dict: Dict[str, Any], prefix: str = "scalar_field_values_") -> Tuple[np.ndarray, List[str]]:
@@ -85,3 +89,109 @@ def infer_grid_from_scalar_fields(scalar_fields_2d: np.ndarray) -> Tuple[int, in
     if n * n != values_per_field:
         raise ValueError(f"Cannot infer square grid from {values_per_field} values.")
     return num_fields, n, n
+
+
+def poly_to_true_sdf(poly_xyz, bbox_min, bbox_max, nx=256, ny=256):
+    """
+    Convert a closed polyline to a true signed distance field using Euclidean Distance Transform.
+    
+    Creates an accurate SDF with world-unit distances where negative values represent
+    the interior of the polygon and positive values represent the exterior.
+    
+    Args:
+        poly_xyz: Polyline points array (m, 3) - will use only x,y coordinates
+                 Automatically closed if first != last point
+        bbox_min: Bounding box minimum [x, y, z] in world units
+        bbox_max: Bounding box maximum [x, y, z] in world units
+        nx: Grid width (default: 256)
+        ny: Grid height (default: 256)
+    
+    Returns:
+        2D SDF array (ny, nx) with world-unit distances
+        - Negative values: inside polygon (material)
+        - Positive values: outside polygon (void)
+        - Zero: on polygon boundary surface
+        - |∇SDF| ≈ 1 (true distance property)
+    
+    Example:
+        >>> poly = np.array([[0, 0, 0], [10, 0, 0], [10, 10, 0], [0, 10, 0]])
+        >>> bbox_min, bbox_max = [0, 0, 0], [10, 10, 10]
+        >>> sdf = poly_to_true_sdf(poly, bbox_min, bbox_max, nx=128, ny=128)
+        >>> sdf.shape
+        (128, 128)
+        >>> np.min(sdf) < 0  # Has interior
+        True
+    
+    Note:
+        - Uses matplotlib.path for point-in-polygon test
+        - Uses scipy.ndimage.distance_transform_edt with world-unit sampling
+        - Automatically handles unclosed polylines
+        - Grid spacing accounts for world-unit bbox for accurate distances
+    """
+    poly_xyz = np.asarray(poly_xyz, dtype=float)
+    poly_xy = poly_xyz[:, :2]
+
+    # Ensure closed polyline
+    if np.linalg.norm(poly_xy[0] - poly_xy[-1]) > 1e-9:
+        poly_xy = np.vstack([poly_xy, poly_xy[0:1]])
+
+    xmin, ymin = float(bbox_min[0]), float(bbox_min[1])
+    xmax, ymax = float(bbox_max[0]), float(bbox_max[1])
+
+    xs = np.linspace(xmin, xmax, nx)
+    ys = np.linspace(ymin, ymax, ny)
+    X, Y = np.meshgrid(xs, ys)
+
+    dx = (xmax - xmin) / (nx - 1)
+    dy = (ymax - ymin) / (ny - 1)
+
+    # Inside mask via point-in-polygon
+    pts = np.stack([X.ravel(), Y.ravel()], axis=-1)
+    inside = MplPath(poly_xy).contains_points(pts).reshape(ny, nx)
+
+    # EDT (true distance in world units because sampling=(dy,dx))
+    dist_in = distance_transform_edt(inside, sampling=(dy, dx))
+    dist_out = distance_transform_edt(~inside, sampling=(dy, dx))
+
+    # Signed: inside negative, outside positive
+    phi = dist_out - dist_in
+    return phi
+
+
+def load_sdf_list_from_inshapes(json_path, nx=256, ny=256, branch_index=0):
+    """
+    Load polylines from inShapes.json and convert to true SDF list.
+    
+    Reads polygon data from JSON file containing shape definitions and bounding box,
+    then converts each polyline to a true signed distance field.
+    
+    Args:
+        json_path: Path to inShapes.json file containing polyline data
+        nx: Grid width for SDF (default: 256)
+        ny: Grid height for SDF (default: 256)
+        branch_index: Which shape branch to load (default: 0)
+    
+    Returns:
+        List of SDF arrays, one per slice/polyline
+        Each SDF is (ny, nx) with world-unit signed distances
+    
+    Example:
+        >>> sdfs = load_sdf_list_from_inshapes("alice_result/inShapes.json", nx=256, ny=256)
+        >>> len(sdfs)
+        60  # Number of slices
+        >>> sdfs[0].shape
+        (256, 256)
+    
+    Note:
+        - Requires inShapes.json format: {"shapes": [...], "bbox": {"minbb": [...], "maxbb": [...]}}
+        - Each shape contains "polys" list of polylines
+        - All SDFs share same bounding box from JSON
+        - Progress printed for large datasets
+    """
+    data = json.loads(Path(json_path).read_text())
+    bbox_min = data["bbox"]["minbb"]
+    bbox_max = data["bbox"]["maxbb"]
+
+    polys = data["shapes"][branch_index]["polys"]
+    sdfs = [poly_to_true_sdf(poly, bbox_min, bbox_max, nx=nx, ny=ny) for poly in polys]
+    return sdfs

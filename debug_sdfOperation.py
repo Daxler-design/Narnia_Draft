@@ -323,6 +323,36 @@ def voronoi_ridge_band_sdf_world(shape, centroids_px, bbox_min, bbox_max, sigma_
     return phi
 
 
+def sigma_list_generate(min_sigma, max_sigma, num_slices, method="linear"):
+    """
+    Generate a sigma list with smooth interpolation.
+    method: "linear", "exp", "ease", "cosine"
+    """
+    if num_slices <= 0:
+        return []
+    if num_slices == 1:
+        return [float(min_sigma)]
+
+    min_sigma = float(min_sigma)
+    max_sigma = float(max_sigma)
+    t = np.linspace(0.0, 1.0, num_slices)
+    m = str(method).lower()
+
+    if m == "linear":
+        w = t
+    elif m in ("exp", "exponential"):
+        k = 3.0
+        w = (np.exp(k * t) - 1.0) / (np.exp(k) - 1.0)
+    elif m in ("ease", "ease_in_out"):
+        w = t * t * (3.0 - 2.0 * t)
+    elif m == "cosine":
+        w = 0.5 - 0.5 * np.cos(np.pi * t)
+    else:
+        raise ValueError(f"Unknown method '{method}'. Use linear, exp, ease, or cosine.")
+
+    sigmas = min_sigma + (max_sigma - min_sigma) * w
+    return sigmas.tolist()
+
 
         
 def generate_bracing_cavity_static_world(sdf_profiles, iso_level_offset, nx, ny, k, seed=42, sigma_world=None, debug_interval=10, debugOutput=False):
@@ -338,6 +368,10 @@ def generate_bracing_cavity_static_world(sdf_profiles, iso_level_offset, nx, ny,
     :param k: centroid count per slice
     :param seed: Random seed for centroid generation
     :param sigma_world: real world units for voronoi ridge band thickness
+                         - float: constant for all slices
+                         - list/tuple: interpolated across slices
+                           * [v0, v1, ...] -> evenly spaced keyframes
+                           * [(idx, v), ...] -> explicit keyframes by slice index
     :param debug_interval: Interval for debug output (in slices)
     :param debugOutput: Whether to output debug plots
 
@@ -347,6 +381,7 @@ def generate_bracing_cavity_static_world(sdf_profiles, iso_level_offset, nx, ny,
     num_slice = len(sdf_profiles)
     bracing_cavities_sdf = np.zeros((num_slice, ny, nx))
     prev_centroids = None
+
     for i in range(num_slice):
         slice_2d = sdf_profiles[i]
         
@@ -356,11 +391,15 @@ def generate_bracing_cavity_static_world(sdf_profiles, iso_level_offset, nx, ny,
         centroids = generate_centroids(mask, k=k, prev_centroids=None, seed=seed)
         centroids = constrain_centroids_to_mask(centroids, mask)
         
+        if isinstance(sigma_world, (list, tuple, np.ndarray)):
+            sigma_i = sigma_world[i]
+        else:
+            sigma_i = sigma_world
         V= voronoi_ridge_band_sdf_world(slice_2d.shape,
                                         centroids_px=centroids,
                                         bbox_min=bbox_min,
                                         bbox_max=bbox_max,
-                                        sigma_world=sigma_world)
+                                        sigma_world=sigma_i)
         
         profile_slice_offset = slice_2d + iso_level_offset
         bracing_cavity = np.maximum(profile_slice_offset, -V)
@@ -391,77 +430,126 @@ def generate_bracing_cavity_static_world(sdf_profiles, iso_level_offset, nx, ny,
     return bracing_cavities_sdf
 
 
+def save_npz_for_gui(
+    output_path,
+    result_fields_3d,
+    profile_fields_3d=None,
+    bracing_fields_3d=None,
+    bounds_min=None,
+    bounds_max=None,
+    iso_level=0.0,
+    total_height=None,
+):
+    """
+    Save SDF stacks to NPZ matching the GUI's expected format.
+    """
+    result_fields_3d = np.asarray(result_fields_3d)
+    if result_fields_3d.ndim != 3:
+        raise ValueError("result_fields_3d must be (num_slices, ny, nx)")
+
+    num_slices = result_fields_3d.shape[0]
+    result_fields_2d = result_fields_3d.reshape(num_slices, -1)
+
+    safe_total_height = None
+    if total_height is not None:
+        try:
+            safe_total_height = float(total_height)
+        except (TypeError, ValueError):
+            safe_total_height = None
+    if safe_total_height is None or safe_total_height <= 0.0:
+        safe_total_height = float(max(num_slices - 1, 1))
+
+    save_dict = {
+        "result_fields": result_fields_2d,
+        "iso_level": float(iso_level),
+        "bounds_min": np.array(bounds_min) if bounds_min is not None else None,
+        "bounds_max": np.array(bounds_max) if bounds_max is not None else None,
+        "total_height": safe_total_height,
+        "slice_count": int(num_slices),
+    }
+
+    if profile_fields_3d is not None:
+        profile_fields_3d = np.asarray(profile_fields_3d)
+        save_dict["profile_fields"] = profile_fields_3d.reshape(num_slices, -1)
+
+    if bracing_fields_3d is not None:
+        bracing_fields_3d = np.asarray(bracing_fields_3d)
+        save_dict["bracing_fields"] = bracing_fields_3d.reshape(num_slices, -1)
+
+    np.savez(output_path, **save_dict)
+
+
 
 # NOT-USE: this method has problems with infinite ridges
-def compute_voronoi_ridge_sdf_world(
-    shape: Tuple[int, int],
-    centroids: np.ndarray,                 # (k,2) in (y,x) pixel coords
-    ridge_thickness: float = 1.0,          # if bbox provided: WORLD units; else: PIXEL units
-    bbox_min: Optional[list] = None,       # [x,y,z]
-    bbox_max: Optional[list] = None,       # [x,y,z]
-) -> np.ndarray:
-    ny, nx = shape
+# def compute_voronoi_ridge_sdf_world(
+#     shape: Tuple[int, int],
+#     centroids: np.ndarray,                 # (k,2) in (y,x) pixel coords
+#     ridge_thickness: float = 1.0,          # if bbox provided: WORLD units; else: PIXEL units
+#     bbox_min: Optional[list] = None,       # [x,y,z]
+#     bbox_max: Optional[list] = None,       # [x,y,z]
+# ) -> np.ndarray:
+#     ny, nx = shape
 
-    # -----------------------
-    # Choose coordinate system
-    # -----------------------
-    if bbox_min is None or bbox_max is None:
-        # ===== Original behavior: PIXEL space =====
-        # centroids are (y,x) but Euclidean points should be (x,y)
-        pts = np.stack([centroids[:, 1], centroids[:, 0]], axis=1)  # (x,y) in pixels
+#     # -----------------------
+#     # Choose coordinate system
+#     # -----------------------
+#     if bbox_min is None or bbox_max is None:
+#         # ===== Original behavior: PIXEL space =====
+#         # centroids are (y,x) but Euclidean points should be (x,y)
+#         pts = np.stack([centroids[:, 1], centroids[:, 0]], axis=1)  # (x,y) in pixels
 
-        # Grid points in pixel coords (x,y)
-        Y, X = np.indices((ny, nx))
-        grid_points = np.stack([X.ravel(), Y.ravel()], axis=-1)      # (x,y) pixels
+#         # Grid points in pixel coords (x,y)
+#         Y, X = np.indices((ny, nx))
+#         grid_points = np.stack([X.ravel(), Y.ravel()], axis=-1)      # (x,y) pixels
 
-        thickness = float(ridge_thickness)  # pixels
+#         thickness = float(ridge_thickness)  # pixels
 
-    else:
-        # ===== World behavior: WORLD space =====
-        xmin, ymin = float(bbox_min[0]), float(bbox_min[1])
-        xmax, ymax = float(bbox_max[0]), float(bbox_max[1])
+#     else:
+#         # ===== World behavior: WORLD space =====
+#         xmin, ymin = float(bbox_min[0]), float(bbox_min[1])
+#         xmax, ymax = float(bbox_max[0]), float(bbox_max[1])
 
-        # centroids: (y,x) pixel -> (x,y) world
-        cx = xmin + (centroids[:, 1] / (nx - 1)) * (xmax - xmin)
-        cy = ymin + (centroids[:, 0] / (ny - 1)) * (ymax - ymin)
-        pts = np.stack([cx, cy], axis=1)  # (x,y) world
+#         # centroids: (y,x) pixel -> (x,y) world
+#         cx = xmin + (centroids[:, 1] / (nx - 1)) * (xmax - xmin)
+#         cy = ymin + (centroids[:, 0] / (ny - 1)) * (ymax - ymin)
+#         pts = np.stack([cx, cy], axis=1)  # (x,y) world
 
-        # Grid points: (row,col) -> (x,y) world
-        xs = np.linspace(xmin, xmax, nx)
-        ys = np.linspace(ymin, ymax, ny)
-        Xw, Yw = np.meshgrid(xs, ys, indexing="xy")                 # (ny,nx)
-        grid_points = np.stack([Xw.ravel(), Yw.ravel()], axis=-1)    # (x,y) world
+#         # Grid points: (row,col) -> (x,y) world
+#         xs = np.linspace(xmin, xmax, nx)
+#         ys = np.linspace(ymin, ymax, ny)
+#         Xw, Yw = np.meshgrid(xs, ys, indexing="xy")                 # (ny,nx)
+#         grid_points = np.stack([Xw.ravel(), Yw.ravel()], axis=-1)    # (x,y) world
 
-        thickness = float(ridge_thickness)  # world units
+#         thickness = float(ridge_thickness)  # world units
 
-    # -----------------------
-    # Voronoi + finite ridge segments
-    # -----------------------
-    # vor = Voronoi(pts)
-    vor = Voronoi(pts, qhull_options="Qbb Qc Qx QJ")
+#     # -----------------------
+#     # Voronoi + finite ridge segments
+#     # -----------------------
+#     # vor = Voronoi(pts)
+#     vor = Voronoi(pts, qhull_options="Qbb Qc Qx QJ")
 
-    ridge_segments = []
-    for ridge_vertices in vor.ridge_vertices:
-        if -1 in ridge_vertices:
-            continue
-        v0 = vor.vertices[ridge_vertices[0]]  # (x,y)
-        v1 = vor.vertices[ridge_vertices[1]]  # (x,y)
-        ridge_segments.append((v0, v1))
+#     ridge_segments = []
+#     for ridge_vertices in vor.ridge_vertices:
+#         if -1 in ridge_vertices:
+#             continue
+#         v0 = vor.vertices[ridge_vertices[0]]  # (x,y)
+#         v1 = vor.vertices[ridge_vertices[1]]  # (x,y)
+#         ridge_segments.append((v0, v1))
 
-    if not ridge_segments:
-        return np.ones((ny, nx), dtype=float) * thickness
+#     if not ridge_segments:
+#         return np.ones((ny, nx), dtype=float) * thickness
 
-    # -----------------------
-    # Distance to nearest ridge segment
-    # -----------------------
-    min_dists = np.full(grid_points.shape[0], np.inf, dtype=float)
-    for v0, v1 in ridge_segments:
-        dists = point_to_segment_distance(grid_points, v0, v1)  # consistent (x,y)
-        min_dists = np.minimum(min_dists, dists)
+#     # -----------------------
+#     # Distance to nearest ridge segment
+#     # -----------------------
+#     min_dists = np.full(grid_points.shape[0], np.inf, dtype=float)
+#     for v0, v1 in ridge_segments:
+#         dists = point_to_segment_distance(grid_points, v0, v1)  # consistent (x,y)
+#         min_dists = np.minimum(min_dists, dists)
 
-    # Signed distance: negative inside ridge (material), positive outside
-    sdf = (min_dists - thickness).reshape((ny, nx))
-    return sdf
+#     # Signed distance: negative inside ridge (material), positive outside
+#     sdf = (min_dists - thickness).reshape((ny, nx))
+#     return sdf
 
 
 # ------------------------------------------------------------------------------
@@ -490,28 +578,203 @@ for i, sdf in enumerate(sdf_profiles):
         
 # 2. generate bracing cavitys sdf profiles
 
+sigma_values = sigma_list_generate(min_sigma=0.02, max_sigma=0.035, num_slices=len(sdf_profiles), method="ease")
+
 bracing_cavitys_sdf = generate_bracing_cavity_static_world(
     sdf_profiles,
-    iso_level_offset=0.08,
+    iso_level_offset=0.02,
     nx=nx,
     ny=ny,
     k=5,
     seed=42,
-    sigma_world=0.03,
+    sigma_world=sigma_values,
     debug_interval=10,
     debugOutput=False)
 
+bracing_sdf_result = np.maximum(np.asarray(sdf_profiles), -bracing_cavitys_sdf)
 
-# 3. output thin wall profile with bracing cavity sdf profiles
-for i in range(len(bracing_cavitys_sdf)):
-    if i %10 ==0:
-        slice_2d = sdf_profiles[i]
-        bracing_cavity = bracing_cavitys_sdf[i]
-        bracing_slice = np.maximum(slice_2d, -bracing_cavity)
-
+# 3. output thin wall profile with bracing cavity sdf profiles (debug previews)
+for i in range(len(bracing_sdf_result)):
+    if i % 5 == 0:
+        bracing_slice = bracing_sdf_result[i]
         debug.output_debug_plot_world_offsets(
-            bracing_slice, 
+            bracing_slice,
             bbox_min=bbox_min, bbox_max=bbox_max, nx=nx, ny=ny, slice_idx=i,
             offset_step_world=0.01,
             show_offset=False,
             file_name_prefix="bracing_field")
+
+# 4. save NPZ for GUI viewer
+save_npz_for_gui(
+    output_path="output/debug_bracing_results.npz",
+    result_fields_3d=bracing_sdf_result,
+    profile_fields_3d=sdf_profiles,
+    bracing_fields_3d=bracing_cavitys_sdf,
+    bounds_min=bbox_min,
+    bounds_max=bbox_max,
+    iso_level=0.0,
+    total_height=(bbox_max[2] - bbox_min[2]) if len(bbox_max) > 2 else None,
+)
+
+
+
+# grasshopper CPython helper: load a slice from NPZ and return Rhino.Geometry curves
+def npz_slice_to_rhino_curves(
+    npz_path,
+    field="result_fields",
+    slice_idx=0,
+    iso_level=0.0,
+):
+    """
+    Grasshopper CPython helper: load a slice from NPZ and return Rhino.Geometry curves.
+    Returns a list of Rhino.Geometry.PolylineCurve.
+    """
+    import numpy as _np
+    import Rhino.Geometry as _rg
+
+    data = _np.load(npz_path, allow_pickle=True)
+    fields = data[field]
+    num_slices, values_per_field = fields.shape
+    n = int(_np.sqrt(values_per_field))
+    if n * n != values_per_field:
+        raise ValueError(f"Cannot infer square grid from {values_per_field} values.")
+    nx = ny = n
+
+    if slice_idx < 0 or slice_idx >= num_slices:
+        raise IndexError(f"slice_idx {slice_idx} out of range 0..{num_slices - 1}")
+
+    bmin = data.get("bounds_min", _np.array([0.0, 0.0, 0.0]))
+    bmax = data.get("bounds_max", _np.array([1.0, 1.0, 1.0]))
+    xmin, ymin = float(bmin[0]), float(bmin[1])
+    xmax, ymax = float(bmax[0]), float(bmax[1])
+
+    slice_2d = fields[slice_idx].reshape((ny, nx))
+
+    def _interp(p1, p2, v1, v2):
+        if abs(v2 - v1) < 1e-12:
+            t = 0.5
+        else:
+            t = (iso_level - v1) / (v2 - v1)
+        return p1 + t * (p2 - p1)
+
+    # Marching squares edges per cell
+    segments = []
+    for iy in range(ny - 1):
+        for ix in range(nx - 1):
+            v00 = slice_2d[iy, ix]
+            v10 = slice_2d[iy, ix + 1]
+            v11 = slice_2d[iy + 1, ix + 1]
+            v01 = slice_2d[iy + 1, ix]
+
+            case = 0
+            if v00 >= iso_level:
+                case |= 1
+            if v10 >= iso_level:
+                case |= 2
+            if v11 >= iso_level:
+                case |= 4
+            if v01 >= iso_level:
+                case |= 8
+            if case == 0 or case == 15:
+                continue
+
+            # cell corner coords in grid space
+            p00 = _np.array([ix, iy], dtype=float)
+            p10 = _np.array([ix + 1, iy], dtype=float)
+            p11 = _np.array([ix + 1, iy + 1], dtype=float)
+            p01 = _np.array([ix, iy + 1], dtype=float)
+
+            # edge interpolation points
+            e0 = _interp(p00, p10, v00, v10)  # top
+            e1 = _interp(p10, p11, v10, v11)  # right
+            e2 = _interp(p11, p01, v11, v01)  # bottom
+            e3 = _interp(p01, p00, v01, v00)  # left
+
+            # case table (segments)
+            if case in (1, 14):
+                segments.append((e3, e0))
+            elif case in (2, 13):
+                segments.append((e0, e1))
+            elif case in (3, 12):
+                segments.append((e3, e1))
+            elif case in (4, 11):
+                segments.append((e1, e2))
+            elif case in (5, 10):
+                segments.append((e3, e0))
+                segments.append((e1, e2))
+            elif case in (6, 9):
+                segments.append((e0, e2))
+            elif case in (7, 8):
+                segments.append((e3, e2))
+
+    if not segments:
+        return []
+
+    # Map grid coords to world XY
+    def _to_world(pt):
+        x = xmin + (pt[0] / (nx - 1)) * (xmax - xmin)
+        y = ymin + (pt[1] / (ny - 1)) * (ymax - ymin)
+        return _rg.Point3d(x, y, 0.0)
+
+    # Stitch segments into polylines
+    tol = 1e-6
+    def _key(pt):
+        return (round(pt[0] / tol) * tol, round(pt[1] / tol) * tol)
+
+    seg_map = {}
+    for a, b in segments:
+        ka = _key(a)
+        kb = _key(b)
+        seg_map.setdefault(ka, []).append(b)
+        seg_map.setdefault(kb, []).append(a)
+
+    curves = []
+    visited = set()
+    for a, b in segments:
+        ka = _key(a)
+        kb = _key(b)
+        if (ka, kb) in visited or (kb, ka) in visited:
+            continue
+
+        poly = [a, b]
+        visited.add((ka, kb))
+
+        # extend forward
+        while True:
+            last = poly[-1]
+            kl = _key(last)
+            neighbors = seg_map.get(kl, [])
+            next_pt = None
+            for npt in neighbors:
+                kn = _key(npt)
+                if (kl, kn) not in visited and (kn, kl) not in visited:
+                    next_pt = npt
+                    visited.add((kl, kn))
+                    break
+            if next_pt is None:
+                break
+            poly.append(next_pt)
+
+        # extend backward
+        while True:
+            first = poly[0]
+            kf = _key(first)
+            neighbors = seg_map.get(kf, [])
+            next_pt = None
+            for npt in neighbors:
+                kn = _key(npt)
+                if (kn, kf) not in visited and (kf, kn) not in visited:
+                    next_pt = npt
+                    visited.add((kn, kf))
+                    break
+            if next_pt is None:
+                break
+            poly.insert(0, next_pt)
+
+        if len(poly) >= 2:
+            pts = [_to_world(p) for p in poly]
+            curves.append(_rg.PolylineCurve(pts))
+
+    return curves
+
+

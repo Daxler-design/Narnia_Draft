@@ -65,6 +65,8 @@ from .data_utils import (
     stack_scalar_fields,
     meta_data_info,
     infer_grid_from_scalar_fields,
+    poly_to_true_sdf,
+    load_sdf_list_from_inshapes,
 )
 
 # SDF operations
@@ -88,6 +90,8 @@ from .bracing_generator import (
     generate_centroids,
     constrain_centroids_to_mask,
     get_profile_mask,
+    voronoi_ridge_band_sdf_world,
+    generate_bracing_cavity_static_world,
 )
 
 # Post-processing
@@ -107,6 +111,8 @@ __all__ = [
     "stack_scalar_fields",
     "meta_data_info",
     "infer_grid_from_scalar_fields",
+    "poly_to_true_sdf",
+    "load_sdf_list_from_inshapes",
     
     # Boolean operations and masking
     "compute_sf_operation",
@@ -124,6 +130,8 @@ __all__ = [
     "compute_voronoi_sdf",
     "generate_centroids",
     "constrain_centroids_to_mask",
+    "voronoi_ridge_band_sdf_world",
+    "generate_bracing_cavity_static_world",
     
     # Post-processing
     "postprocess_bracing_fields",

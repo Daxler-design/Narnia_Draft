@@ -333,7 +333,68 @@ class NarniaCurveViewer:
 
         self._tabs.add_tab("NPZ Viewer", self._viewer_panel)
 
-        # --- TAB 3: MESH ---
+        # --- TAB 3: COMPUTE FROM CURVES (True SDF) ---
+        self._curve_panel = gui.Vert(0, gui.Margins(10, 10, 10, 10))
+        
+        # File picker for inShapes.json
+        row_crv, self._curve_json_path = vwg.create_file_input_row(
+            "inShapes JSON path",
+            "./alice_result/inShapes.json",
+            self._on_select_curve_json
+        )
+        self._curve_panel.add_child(row_crv)
+        self._curve_panel.add_fixed(10)
+        
+        # Grid resolution dropdown
+        self._curve_panel.add_child(gui.Label("Grid Resolution"))
+        self._curve_grid_res_combo = gui.Combobox()
+        for res in [128, 256, 512]:
+            self._curve_grid_res_combo.add_item(str(res))
+        self._curve_grid_res_combo.selected_index = 1  # Default 256
+        self._curve_panel.add_child(self._curve_grid_res_combo)
+        self._curve_panel.add_fixed(10)
+        
+        # k slider (centroids)
+        row_k, self._curve_k_slider, self._curve_k_edit = vwg.create_slider_row(
+            "Centroids (k)", 1, 7, 5, None, is_int=True
+        )
+        self._curve_panel.add_child(row_k)
+        self._curve_panel.add_fixed(10)
+        
+        # iso_level_offset slider (meters)
+        row_iso, self._curve_iso_offset_slider, self._curve_iso_offset_edit = vwg.create_slider_row(
+            "Profile Offset (m)", 0.0, 0.3, 0.08, None
+        )
+        self._curve_panel.add_child(row_iso)
+        self._curve_panel.add_fixed(10)
+        
+        # sigma_world slider (meters)
+        row_sigma, self._curve_sigma_slider, self._curve_sigma_edit = vwg.create_slider_row(
+            "Ridge Width (m)", 0.01, 0.1, 0.03, None
+        )
+        self._curve_panel.add_child(row_sigma)
+        self._curve_panel.add_fixed(16)
+        
+        # Generate button
+        self._btn_compute_curves = gui.Button("Generate Bracing from Curves")
+        self._btn_compute_curves.set_on_clicked(self._on_compute_from_curves)
+        self._curve_panel.add_child(self._btn_compute_curves)
+        self._curve_panel.add_fixed(16)
+        
+        # Boolean Operation Controls (simplified - mode only)
+        self._curve_panel.add_child(gui.Label("--- Boolean Operation ---"))
+        self._curve_panel.add_child(gui.Label("Mode"))
+        self._curve_op_mode_combo = gui.Combobox()
+        self._curve_op_mode_combo.add_item("difference")
+        self._curve_op_mode_combo.add_item("union")
+        self._curve_op_mode_combo.add_item("intersection")
+        self._curve_op_mode_combo.set_on_selection_changed(self._on_curve_boolean_param_changed)
+        self._curve_panel.add_child(self._curve_op_mode_combo)
+        
+        self._tabs.add_tab("ComputeFromCrv", self._curve_panel)
+        self._curve_tab_index = 2  # Track curve tab index
+
+        # --- TAB 4: MESH ---
         self._mesh_panel = gui.Vert(0, gui.Margins(10, 10, 10, 10))
 
         self._mesh_panel.add_child(gui.Label("Source"))
@@ -368,7 +429,7 @@ class NarniaCurveViewer:
         self._mesh_panel.add_child(gui.Label("--- Marching Cubes Parameters ---"))
         
         row_m_height, self._mesh_height_slider, self._mesh_height_edit = vwg.create_slider_row(
-            "Total Height", 0.1, 100.0, 10.0, None
+            "Total Height", 0.1, 100.0, 10.0, self._on_mesh_height_changed
         )
         row_m_interp, self._mesh_interp_slider, self._mesh_interp_edit = vwg.create_slider_row(
             "Z Interpolation", 0, 5, 2, None, is_int=True
@@ -443,7 +504,7 @@ class NarniaCurveViewer:
         self._mesh_panel.add_child(gui.Label("Note: Uses marching cubes."))
 
         self._tabs.add_tab("Mesh", self._mesh_panel)
-        self._mesh_tab_index = 2
+        self._mesh_tab_index = 3
 
         # --- SHARED CONTROLS (Bottom) ---
         self._panel = gui.Vert(0, gui.Margins(10, 10, 10, 10))
@@ -530,6 +591,7 @@ class NarniaCurveViewer:
         self.compute_state = vut.ViewState()
         self.viewer_state = vut.ViewState()
         self.custom_state = vut.ViewState()  # For custom NPZ loaded from Mesh tab
+        self.curve_state = vut.ViewState()  # For curve-based true SDF workflow
         self.custom_npz_path: Optional[str] = None  # Track custom NPZ filename
 
         self._curves_geom: Optional[o3d.geometry.LineSet] = None
@@ -560,17 +622,21 @@ class NarniaCurveViewer:
     def _on_tab_changed(self, index):
         # Hide/show visualization and export panels based on tab
         is_mesh_tab = (index == self._mesh_tab_index)
+        is_curve_tab = (index == self._curve_tab_index)
         
-        # Hide slice controls and export panel in mesh tab
+        # Slice controls visible on Compute, NPZ, and Curve tabs (not Mesh)
         self._viz_label.visible = not is_mesh_tab
         self._slice_label.visible = not is_mesh_tab
         self._slice_slider.visible = not is_mesh_tab
         self._btn_fit.visible = not is_mesh_tab
-        self._export_label.visible = not is_mesh_tab
-        self._output_dir.visible = not is_mesh_tab
-        self._btn_select_output.visible = not is_mesh_tab
-        self._export_opts_horiz.visible = not is_mesh_tab
-        self._btn_export.visible = not is_mesh_tab
+        
+        # Export panel hidden on Mesh and Curve tabs
+        hide_export = is_mesh_tab or is_curve_tab
+        self._export_label.visible = not hide_export
+        self._output_dir.visible = not hide_export
+        self._btn_select_output.visible = not hide_export
+        self._export_opts_horiz.visible = not hide_export
+        self._btn_export.visible = not hide_export
         
         self._window.set_needs_layout()
         
@@ -593,6 +659,17 @@ class NarniaCurveViewer:
         idx_tab = self._tabs.selected_tab_index
         if idx_tab == self._mesh_tab_index:
             return
+        
+        # Handle curve tab
+        if idx_tab == self._curve_tab_index:
+            state = self.curve_state
+            res = state.result
+            # Curve tab uses fixed iso=0, so no slider range update needed
+            if res is not None:
+                max_slices = res.shape[0]
+                self._slice_slider.set_limits(0, max_slices - 1)
+            return
+        
         state = self.compute_state if idx_tab == 0 else self.viewer_state
         res = state.result
         
@@ -642,6 +719,12 @@ class NarniaCurveViewer:
         
         self._update_boolean_result()
         self._update_scene(fit_camera=False)
+    
+    def _on_curve_boolean_param_changed(self, *args):
+        """Handle curve tab boolean parameter changes."""
+        if self.curve_state.profile is None or self.curve_state.bracing is None:
+            return
+        self._update_curve_result()
 
     def _on_postprocess_param_changed(self, *args):
         if self.compute_state.bracing is None or self.compute_state.profile is None:
@@ -684,6 +767,21 @@ class NarniaCurveViewer:
             iso_level_B=self.compute_state.iso_b_base + off_b,
             mode=mode,
         )
+    
+    def _update_curve_result(self):
+        """Recompute curve_state.result using current boolean settings."""
+        if self.curve_state.profile is None or self.curve_state.bracing is None:
+            return
+        mode = self._curve_op_mode_combo.get_item(self._curve_op_mode_combo.selected_index)
+        
+        # Boolean: result = max(profile, -bracing_cavity)
+        # Negate bracing cavity before union to match debug_sdfOperation.py formula
+        self.curve_state.result = core.compute_sf_operation(
+            self.curve_state.profile, -self.curve_state.bracing,
+            iso_level_A=0.0, iso_level_B=0.0, mode=mode
+        )
+        self._invalidate_mesh_cache(self.curve_state)
+        self._update_scene(fit_camera=False)
 
     def _on_layout(self, layout_context):
         r = self._window.content_rect
@@ -933,6 +1031,8 @@ class NarniaCurveViewer:
             self._mesh_source_combo.selected_index = 2  # Select the custom source
             
             # Update mesh tab UI
+            self._update_mesh_height_limits(total_height, bmin, bmax)
+            self._update_mesh_height_limits(total_height, bmin, bmax)
             self._mesh_height_slider.double_value = total_height
             self._mesh_height_edit.double_value = total_height
             
@@ -1088,7 +1188,15 @@ class NarniaCurveViewer:
         if self._tabs.selected_tab_index == self._mesh_tab_index:
             return
         idx_tab = self._tabs.selected_tab_index
-        state = self.compute_state if idx_tab == 0 else self.viewer_state
+        
+        # Determine active state based on tab
+        if idx_tab == 0:  # Compute
+            state = self.compute_state
+        elif idx_tab == self._curve_tab_index:  # ComputeFromCrv
+            state = self.curve_state
+        else:  # NPZ
+            state = self.viewer_state
+            
         if state.result is None:
             return
         self._update_scene(fit_camera=False)
@@ -1129,6 +1237,35 @@ class NarniaCurveViewer:
             self._mesh_slice_info.text = f"{final_slices} slices (×{z_interp + 1} interp)"
         else:
             self._mesh_slice_info.text = f"{final_slices} slices (no interp)"
+
+    def _on_mesh_height_changed(self, value):
+        # Invalidate mesh cache so updated height is used on next generation.
+        source_text = self._mesh_source_combo.get_item(self._mesh_source_combo.selected_index)
+        if source_text == "Compute":
+            state = self.compute_state
+        elif source_text == "NPZ Viewer":
+            state = self.viewer_state
+        elif source_text.startswith("Custom"):
+            state = self.custom_state
+        else:
+            state = self.viewer_state
+        self._invalidate_mesh_cache(state)
+
+    def _update_mesh_height_limits(self, total_height, bounds_min, bounds_max):
+        if bounds_min is None or bounds_max is None:
+            return
+        try:
+            total_height = float(total_height)
+        except (TypeError, ValueError):
+            total_height = None
+
+        x_extent = float(bounds_max[0] - bounds_min[0])
+        y_extent = float(bounds_max[1] - bounds_min[1])
+        xy_extent = max(x_extent, y_extent)
+
+        max_height = max(100.0, (total_height or 0.0) * 2.0, xy_extent * 2.0)
+        min_height = 0.01
+        self._mesh_height_slider.set_limits(min_height, max_height)
 
     def _compute_from_paths(self, bracing_json_path: str, profile_json_path: str):
         self._status.text = "Loading profile data..."
@@ -1334,6 +1471,23 @@ class NarniaCurveViewer:
             off_b = self._bracing_offset_slider.double_value
             inputs["iso_p"] = iso_p_base
             inputs["iso_b"] = iso_b_base + off_b
+            
+        elif idx_tab == self._curve_tab_index: # ComputeFromCrv
+            state = self.curve_state
+            inputs["res"] = state.result  # Blue result (bracing field)
+            inputs["prof"] = state.profile  # White profile contour
+            inputs["brac"] = None  # Don't show bracing cavity
+            
+            inputs["bmin"], inputs["bmax"] = state.bounds_min, state.bounds_max
+            inputs["nx"], inputs["ny"], inputs["X"], inputs["Y"] = state.grid
+            
+            # Result iso at 0 for true SDF boundary
+            inputs["iso"] = 0.0
+            inputs["curve_color"] = [0.1, 0.7, 0.95, 1.0]  # Blue for result (bracing field)
+            
+            # Profile iso at 0 for true SDF boundary
+            inputs["iso_p"] = 0.0
+            inputs["iso_b"] = 0.0  # Not used (brac=None)
             
         else: # NPZ
             state = self.viewer_state
@@ -1866,6 +2020,102 @@ class NarniaCurveViewer:
                 fit_camera=False
             )
             self._status.text = f"Showing cached meshes from {source_text}"
+    
+    def _on_select_curve_json(self):
+        """Open file dialog to select inShapes.json."""
+        dlg = gui.FileDialog(gui.FileDialog.OPEN, "Select inShapes JSON", self._window.theme)
+        dlg.add_filter(".json", "JSON files (.json)")
+        dlg.add_filter("", "All files")
+        dlg.set_on_cancel(self._on_file_dialog_cancel)
+        dlg.set_on_done(self._on_curve_json_done)
+        self._window.show_dialog(dlg)
+    
+    def _on_curve_json_done(self, path):
+        """Handle curve JSON file selection."""
+        self._curve_json_path.text_value = path
+        self._window.close_dialog()
+    
+    def _on_compute_from_curves(self):
+        """Generate bracing from curves using true SDF pipeline."""
+        json_path = self._resolve_path(self._curve_json_path.text_value)
+        res = int(self._curve_grid_res_combo.selected_text)
+        k = int(self._curve_k_slider.double_value)
+        iso_offset = self._curve_iso_offset_slider.double_value
+        sigma_world = self._curve_sigma_slider.double_value
+        
+        try:
+            print(f"\n=== ComputeFromCrv: Loading {json_path} ===")
+            
+            # 1. Load polylines → true SDFs
+            sdf_profiles = core.load_sdf_list_from_inshapes(str(json_path), nx=res, ny=res)
+            print(f"  ✓ Loaded {len(sdf_profiles)} SDF slices (resolution: {res}x{res})")
+            
+            # 2. Load bbox from JSON
+            with open(json_path) as f:
+                data = json.load(f)
+            bounds_min = np.array(data["bbox"]["minbb"], dtype=float)
+            bounds_max = np.array(data["bbox"]["maxbb"], dtype=float)
+            print(f"  ✓ Bbox: [{bounds_min[0]:.2f}, {bounds_min[1]:.2f}, {bounds_min[2]:.2f}] to [{bounds_max[0]:.2f}, {bounds_max[1]:.2f}, {bounds_max[2]:.2f}]")
+            
+            # 3. Generate bracing cavities
+            print(f"  Generating bracing (k={k}, iso_offset={iso_offset:.3f}m, sigma={sigma_world:.3f}m)...")
+            
+            # Convert list to array
+            # sdf_profiles_array = np.array(sdf_profiles)
+
+            bracing_cavities_sdf = core.generate_bracing_cavity_static_world(
+                    sdf_profiles,
+                    iso_level_offset=0.08,
+                    nx=res,
+                    ny=res,
+                    k=k,
+                    bbox_max=bounds_max,
+                    bbox_min=bounds_min,
+                    seed=42,
+                    sigma_world=sigma_world,
+                    debug_interval=10,
+                    debugOutput=False)
+
+                
+            # bracing_sdf_results = [core.compute_sf_operation(sdf_profiles[i], bracing_cavities_sdf[i], self.boolean) for i in range(len(sdf_profiles))]
+      
+            print(f"  ✓ {len(bracing_cavities_sdf)} Bracing Cavities generation complete")
+            
+            # 4. Populate curve_state
+            # Convert list to numpy array to match compute_sf_operation expectations
+            self.curve_state.profile = np.array(sdf_profiles)  # (num_slices, ny, nx)
+            self.curve_state.bracing = bracing_cavities_sdf    # Already np.array from core function
+            self.curve_state.iso_p_base = 0.0
+            self.curve_state.iso_b_base = 0.0
+            self.curve_state.bounds_min = bounds_min
+            self.curve_state.bounds_max = bounds_max
+            
+            # 5. Set grid directly (we know res from user input)
+            x = np.linspace(bounds_min[0], bounds_max[0], res)
+            y = np.linspace(bounds_min[1], bounds_max[1], res)
+            X, Y = np.meshgrid(x, y, indexing="xy")
+            self.curve_state.grid = (res, res, X, Y)
+            
+            # 6. Compute boolean result using core API
+            self._update_curve_result()
+            
+            # 7. Invalidate mesh cache
+            self._invalidate_mesh_cache(self.curve_state)
+            
+            # 8. Update scene (stay on current tab)
+            self._update_scene(fit_camera=True)
+            
+            print(f"✓ Generated {len(sdf_profiles)} slices with {len(bracing_cavities_sdf)}  true SDF bracing\n")
+            self._status.text = f"Curve workflow: {len(sdf_profiles)} slices, k={k}, res={res}x{res}"
+            
+        except FileNotFoundError:
+            print(f"✗ Error: File not found: {json_path}")
+            self._status.text = f"Error: File not found"
+        except Exception as e:
+            print(f"✗ Error computing from curves: {e}")
+            import traceback
+            traceback.print_exc()
+            self._status.text = f"Error: {str(e)[:50]}"
 
 
 def run_app(
