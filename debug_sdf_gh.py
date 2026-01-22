@@ -218,6 +218,8 @@ class SdfGhHelper:
         self.grid_dy = None
         self.slice_dz = None
         self.sdf_stack = None
+        self.guiding_curve = None
+        self.guiding_planes = None
 
     # I/O
     def load(self, max_slices: Optional[int] = None) -> "SdfGhHelper":
@@ -434,6 +436,82 @@ class SdfGhHelper:
                 resampled.append(frames[idx])
 
         return resampled
+
+    # Mesh guidance
+    def load_crv(
+        self,
+        curve: "rg.Curve",
+        frames: Optional[Sequence["rg.Plane"]] = None,
+        frame_count: Optional[int] = None,
+    ) -> "SdfGhHelper":
+        """
+        Input: curve (Rhino.Geometry.Curve), frames (optional list of planes),
+               frame_count (optional int)
+        Output: SdfGhHelper (self), with guiding_curve and guiding_planes populated.
+        """
+        try:
+            import Rhino.Geometry as _rg  # type: ignore
+        except Exception as exc:
+            raise ImportError("Rhino.Geometry is required for load_crv.") from exc
+
+        if curve is None:
+            raise ValueError("curve must be a Rhino.Geometry.Curve.")
+
+        if frame_count is None:
+            if self.slice_count_current is not None:
+                frame_count = int(self.slice_count_current)
+            elif self.slice_count is not None:
+                frame_count = int(self.slice_count)
+            else:
+                raise ValueError("Slice count is not available. Call load() first.")
+
+        if frame_count <= 0:
+            raise ValueError("frame_count must be > 0.")
+
+        self.guiding_curve = curve
+        if frames:
+            self.guiding_planes = self.resample_planes_from_curve(frames, frame_count)
+        else:
+            self.guiding_planes = self.build_guiding_planes(curve, frame_count)
+
+        if not self.guiding_planes:
+            raise ValueError("Failed to build guiding planes from curve.")
+
+        return self
+
+    def build_guiding_planes(
+        self, curve: "rg.Curve", count: int
+    ) -> List["rg.Plane"]:
+        """
+        Input: curve (Rhino.Geometry.Curve), count (int)
+        Output: list of Rhino.Geometry.Plane, evenly distributed along curve length.
+        """
+        if count <= 0:
+            raise ValueError("count must be > 0.")
+
+        try:
+            import Rhino.Geometry as _rg  # type: ignore
+        except Exception as exc:
+            raise ImportError("Rhino.Geometry is required for build_guiding_planes.") from exc
+
+        if count == 1:
+            t = curve.Domain.Mid
+            ok, plane = curve.PerpendicularFrameAt(t)
+            return [plane] if ok else []
+
+        params = curve.DivideByCount(count - 1, True)
+        if not params:
+            d0 = curve.Domain.T0
+            d1 = curve.Domain.T1
+            params = [d0 + (i / float(count - 1)) * (d1 - d0) for i in range(count)]
+
+        planes: List[_rg.Plane] = []
+        for t in params:
+            ok, plane = curve.PerpendicularFrameAt(t)
+            if ok:
+                planes.append(plane)
+
+        return planes
 
     def redistance_slice(self, slice_2d: np.ndarray) -> np.ndarray:
         """
@@ -660,6 +738,10 @@ class SdfGhHelper:
         Input: sdf_stack (np.ndarray or None)
         Output: mesh object (Rhino mesh or equivalent).
         """
+        # TODO: build a 3D volume and run marching cubes
+        # - prefer core.mesh_generator.generate_mesh_marching_cubes
+        # - ensure volume spacing uses world units (dz, dy, dx)
+        # - if guiding_planes exist, warp vertices along curve frames
         raise NotImplementedError
 
     def smooth_mesh(self, mesh: Any, method: Optional[str] = None) -> Any:
@@ -688,11 +770,12 @@ import ghpythonlib.treehelpers as tr
 import numpy as np
 import Grasshopper # type: ignore
 import Rhino # type: ignore
-
+import Rhino.Geometry as rg # type: ignore
 
 # inputs
 npz_path: Optional[str]
 index_list: int
+GuideCurve: Optional[rg.Curve]
 
 # outputs
 a: Any
@@ -700,10 +783,14 @@ b: Any
 
 # ----------
 
-def main(npz_path: str, preview_length: Optional[int] = None, max_slices_load: Optional[int] = None):
+def main(npz_path: str, 
+         preview_length: Optional[int] = None, 
+         max_slices_load: Optional[int] = None,
+         guide_curve: Optional[Rhino.Geometry.Curve] = None):
 
     helper = SdfGhHelper(npz_path, field="bracing_fields", iso_level=0.0)
     helper.load(max_slices_load)
+    helper.load_crv(guide_curve) if guide_curve is not None else None
     shape = np.shape(helper.sdf_stack)
 
     print(f"slice_number = {shape[0]}, shape_size = {shape[-2:]}")
@@ -721,12 +808,22 @@ def main(npz_path: str, preview_length: Optional[int] = None, max_slices_load: O
     for i in range(sdf_count):
 
         sdf = helper.get_slice(i)
+        target_pln = helper.guiding_planes[i]
+        target_pln = rg.Plane(target_pln.Origin, target_pln.YAxis, target_pln.XAxis)
+        xform = rg.Transform.PlaneToPlane(
+            rg.Plane.WorldXY, target_pln
+        )
         segments = helper.slice_to_segments(sdf)
         polylines = helper.segments_to_polylines(segments)
         curves = helper.polylines_to_curves(polylines)
+        oriented_contours = []
+        for crv in curves:
+            c = crv.DuplicateCurve()
+            c.Transform(xform)
+            oriented_contours.append(c)
 
         planes.append(helper.get_slice_plane(i))
-        crv_list.append(curves)
+        crv_list.append(oriented_contours)
     # print(f"crv_list  has {len(crv_list)} \n")
     print(crv_list[0])
 
@@ -734,7 +831,9 @@ def main(npz_path: str, preview_length: Optional[int] = None, max_slices_load: O
 
 
 
-crvs,planes=main(npz_path,preview_length=10)
+crvs,planes=main(npz_path,
+                 preview_length=None,
+                 guide_curve=GuideCurve)
 
 # print crvs data structure layers
 print(f"crvs type: {type(crvs)}")
@@ -753,3 +852,15 @@ print(f"crvs[0][0] type: {type(crvs[0][0])}")
 a = tr.list_to_tree(crvs,True)
 # a = crv_tree
 b = tr.list_to_tree(planes)
+
+# Mesh smoke test + hints (GH CPython):
+# helper = SdfGhHelper(npz_path, field="result_fields", iso_level=0.0)
+# helper.load()
+# helper.load_crv(curve)  # evenly distributed frames by slice count
+# sdf_stack = helper.build_interpolated_stack(target_count=60)
+# sdf_stack = helper.redistance_stack(sdf_stack)
+# TODO: mesh = helper.stack_to_mesh(sdf_stack)
+# Hints:
+# - use planar curves for stable PerpendicularFrameAt
+# - if you already have frames, pass them into load_crv(frames=frames)
+# - align target_count with your desired mesh detail and memory budget
