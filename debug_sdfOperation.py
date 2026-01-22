@@ -102,6 +102,67 @@ def load_sdf_list_from_inshapes(json_path, nx=256, ny=256, branch_index=0):
     return sdfs
 
 
+def interpolate_true_sdf_profiles_world(
+    sdf_profiles: List[np.ndarray],
+    bbox_min: List[float],
+    bbox_max: List[float],
+    target_count: int,
+    method: str = "linear",
+    redistance: bool = True,
+) -> np.ndarray:
+    """
+    Input: sdf_profiles (list of np.ndarray), bbox_min (list[float]),
+           bbox_max (list[float]), target_count (int), method (str), redistance (bool)
+    Output: np.ndarray, shape (target_count, ny, nx) true SDF in world units.
+    """
+    if target_count <= 0:
+        raise ValueError("target_count must be > 0.")
+
+    stack = np.asarray(sdf_profiles, dtype=float)
+    if stack.ndim != 3:
+        raise ValueError("sdf_profiles must be a list of 2D arrays (num_slices, ny, nx).")
+
+    source_count, ny, nx = stack.shape
+    if source_count == 0:
+        raise ValueError("sdf_profiles is empty.")
+
+    if method != "linear":
+        raise ValueError("Only linear interpolation is supported for now.")
+
+    xmin, ymin = float(bbox_min[0]), float(bbox_min[1])
+    xmax, ymax = float(bbox_max[0]), float(bbox_max[1])
+    dx = (xmax - xmin) / (nx - 1) if nx > 1 else 0.0
+    dy = (ymax - ymin) / (ny - 1) if ny > 1 else 0.0
+
+    def _redistance(slice_2d: np.ndarray) -> np.ndarray:
+        mask = slice_2d <= 0.0
+        dist_in = distance_transform_edt(mask, sampling=(dy, dx))
+        dist_out = distance_transform_edt(~mask, sampling=(dy, dx))
+        return dist_out - dist_in
+
+    if target_count == source_count:
+        return stack.copy()
+
+    new_stack = np.zeros((target_count, ny, nx), dtype=float)
+    if target_count == 1:
+        interp = stack[0]
+        new_stack[0] = _redistance(interp) if redistance else interp
+        return new_stack
+
+    for i in range(target_count):
+        pos = (i / float(target_count - 1)) * (source_count - 1)
+        i0 = int(np.floor(pos))
+        i1 = int(np.ceil(pos))
+        if i0 == i1:
+            interp = stack[i0]
+        else:
+            t = pos - i0
+            interp = (1.0 - t) * stack[i0] + t * stack[i1]
+        new_stack[i] = _redistance(interp) if redistance else interp
+
+    return new_stack
+
+
 
 
 # ------------------------------------------------------------------------------
@@ -562,9 +623,13 @@ with open("alice_result/inShapes.json", 'r') as f:
     bbox_max = shape_data["bbox"]["maxbb"]
 
 # 1. need convert polylines to true sdfs
-nx = 256
-ny = 256
+nx = 512
+ny = 512
 sdf_profiles = load_sdf_list_from_inshapes("alice_result/inShapes.json", nx=nx, ny=ny, branch_index=0)
+
+# pre-intepolate to target number of slices
+target_num_slices = 100
+
 print(f"Loaded {len(sdf_profiles)} SDF profiles from inShapes.json \n")
 for i, sdf in enumerate(sdf_profiles):
     if i % 10 == 0:
@@ -630,7 +695,7 @@ def npz_slice_to_rhino_curves(
     Returns a list of Rhino.Geometry.PolylineCurve.
     """
     import numpy as _np
-    import Rhino.Geometry as _rg
+    import Rhino.Geometry as _rg #type: ignore
 
     data = _np.load(npz_path, allow_pickle=True)
     fields = data[field]
