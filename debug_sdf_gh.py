@@ -513,6 +513,97 @@ class SdfGhHelper:
 
         return planes
 
+    def _interp_plane(self, p0: "rg.Plane", p1: "rg.Plane", t: float) -> "rg.Plane":
+        """
+        Input: p0 (Plane), p1 (Plane), t (float in [0, 1])
+        Output: interpolated Plane.
+        """
+        import Rhino.Geometry as _rg  # type: ignore
+
+        origin = (1.0 - t) * p0.Origin + t * p1.Origin
+        xaxis = (1.0 - t) * p0.XAxis + t * p1.XAxis
+        yaxis = (1.0 - t) * p0.YAxis + t * p1.YAxis
+        if not xaxis.Unitize() or not yaxis.Unitize():
+            return p0
+
+        zaxis = _rg.Vector3d.CrossProduct(xaxis, yaxis)
+        if not zaxis.Unitize():
+            return p0
+        yaxis = _rg.Vector3d.CrossProduct(zaxis, xaxis)
+        yaxis.Unitize()
+        return _rg.Plane(origin, xaxis, yaxis)
+
+    def _source_plane_at_z(self, z: float) -> "rg.Plane":
+        """
+        Input: z (float)
+        Output: Plane centered on SDF bounds at height z, aligned to WorldXY.
+        """
+        import Rhino.Geometry as _rg  # type: ignore
+
+        if self.bounds_min is None or self.bounds_max is None:
+            raise ValueError("Bounds not available. Call load() first.")
+
+        cx = 0.5 * (self.bounds_min[0] + self.bounds_max[0])
+        cy = 0.5 * (self.bounds_min[1] + self.bounds_max[1])
+        origin = _rg.Point3d(float(cx), float(cy), float(z))
+        return _rg.Plane(origin, _rg.Vector3d.XAxis, _rg.Vector3d.YAxis)
+
+    def _plane_for_z(self, z: float) -> "rg.Plane":
+        """
+        Input: z (float)
+        Output: guiding Plane interpolated by z position.
+        """
+        if not self.guiding_planes:
+            raise ValueError("Guiding planes are not set. Call load_crv() first.")
+        if self.bounds_min is None or self.bounds_max is None:
+            raise ValueError("Bounds not available. Call load() first.")
+
+        zmin = float(self.bounds_min[2]) if len(self.bounds_min) >= 3 else 0.0
+        zmax = float(self.bounds_max[2]) if len(self.bounds_max) >= 3 else zmin
+        count = len(self.guiding_planes)
+        if count == 1:
+            return self.guiding_planes[0]
+
+        if zmax <= zmin + 1e-9:
+            if self.slice_dz is not None and self.slice_dz > 0.0:
+                zmax = zmin + self.slice_dz * (count - 1)
+            else:
+                zmax = zmin + max(count - 1, 1)
+        if zmax <= zmin + 1e-9:
+            return self.guiding_planes[0]
+
+        pos = (z - zmin) / (zmax - zmin)
+        pos = min(max(pos, 0.0), 1.0) * (count - 1)
+        i0 = int(np.floor(pos))
+        i1 = int(np.ceil(pos))
+        if i0 == i1:
+            return self.guiding_planes[i0]
+        t = pos - i0
+        return self._interp_plane(self.guiding_planes[i0], self.guiding_planes[i1], t)
+
+    def _warp_vertices_to_guiding_planes(self, vertices: np.ndarray) -> np.ndarray:
+        """
+        Input: vertices (np.ndarray, shape (N, 3) in world coords)
+        Output: np.ndarray, warped vertices along guiding planes.
+        """
+        import Rhino.Geometry as _rg  # type: ignore
+
+        if not self.guiding_planes:
+            return vertices
+
+        warped = np.zeros_like(vertices, dtype=float)
+        for i, v in enumerate(vertices):
+            z = float(v[2])
+            source_plane = self._source_plane_at_z(z)
+            target_plane = self._plane_for_z(z)
+            xform = _rg.Transform.PlaneToPlane(source_plane, target_plane)
+            pt = _rg.Point3d(float(v[0]), float(v[1]), float(v[2]))
+            pt.Transform(xform)
+            warped[i, 0] = pt.X
+            warped[i, 1] = pt.Y
+            warped[i, 2] = pt.Z
+        return warped
+
     def redistance_slice(self, slice_2d: np.ndarray) -> np.ndarray:
         """
         Input: slice_2d (np.ndarray, shape (ny, nx))
@@ -738,17 +829,79 @@ class SdfGhHelper:
         Input: sdf_stack (np.ndarray or None)
         Output: mesh object (Rhino mesh or equivalent).
         """
-        # TODO: build a 3D volume and run marching cubes
-        # - prefer core.mesh_generator.generate_mesh_marching_cubes
-        # - ensure volume spacing uses world units (dz, dy, dx)
-        # - if guiding_planes exist, warp vertices along curve frames
-        raise NotImplementedError
+        if sdf_stack is None:
+            if self.sdf_stack is None:
+                raise ValueError("SDF stack is not loaded. Call load() first.")
+            sdf_stack = self.sdf_stack
+
+        if self.bounds_min is None or self.bounds_max is None:
+            raise ValueError("Bounds not available. Call load() first.")
+
+        try:
+            from skimage import measure
+        except Exception as exc:
+            raise ImportError("scikit-image is required for marching cubes.") from exc
+
+        nx = sdf_stack.shape[2]
+        ny = sdf_stack.shape[1]
+        nz = sdf_stack.shape[0]
+
+        if self.grid_dx is None:
+            self.grid_dx = (
+                (self.bounds_max[0] - self.bounds_min[0]) / (nx - 1) if nx > 1 else 0.0
+            )
+        if self.grid_dy is None:
+            self.grid_dy = (
+                (self.bounds_max[1] - self.bounds_min[1]) / (ny - 1) if ny > 1 else 0.0
+            )
+
+        dz = self.slice_dz
+        if dz is None or dz <= 0.0:
+            if self.total_height is not None and nz > 1:
+                dz = float(self.total_height) / (nz - 1)
+            elif len(self.bounds_max) >= 3 and nz > 1:
+                dz = float(self.bounds_max[2] - self.bounds_min[2]) / (nz - 1)
+            else:
+                dz = 1.0
+
+        origin = (
+            float(self.bounds_min[0]),
+            float(self.bounds_min[1]),
+            float(self.bounds_min[2]) if len(self.bounds_min) >= 3 else 0.0,
+        )
+
+        verts, faces, _normals, _values = measure.marching_cubes(
+            sdf_stack, level=self.iso_level, spacing=(dz, self.grid_dy, self.grid_dx)
+        )
+
+        verts_xyz = np.zeros_like(verts)
+        verts_xyz[:, 0] = verts[:, 2] + origin[0]
+        verts_xyz[:, 1] = verts[:, 1] + origin[1]
+        verts_xyz[:, 2] = verts[:, 0] + origin[2]
+
+        if self.guiding_planes:
+            verts_xyz = self._warp_vertices_to_guiding_planes(verts_xyz)
+
+        try:
+            import Rhino.Geometry as _rg  # type: ignore
+        except Exception as exc:
+            raise ImportError("Rhino.Geometry is required to build a mesh.") from exc
+
+        mesh = _rg.Mesh()
+        for v in verts_xyz:
+            mesh.Vertices.Add(float(v[0]), float(v[1]), float(v[2]))
+        for f in faces:
+            mesh.Faces.AddFace(int(f[0]), int(f[1]), int(f[2]))
+        mesh.Normals.ComputeNormals()
+        mesh.Compact()
+        return mesh
 
     def smooth_mesh(self, mesh: Any, method: Optional[str] = None) -> Any:
         """
         Input: mesh (mesh object), method (str or None)
         Output: mesh object after smoothing.
         """
+        # TODO: add laplacian/taubin smoothing with Rhino or open3d
         raise NotImplementedError
 
 
@@ -825,22 +978,24 @@ def main(npz_path: str,
         planes.append(helper.get_slice_plane(i))
         crv_list.append(oriented_contours)
     # print(f"crv_list  has {len(crv_list)} \n")
+    mesh = helper.stack_to_mesh(helper.sdf_stack)
     print(crv_list[0])
 
-    return crv_list, planes
+    return crv_list, planes, mesh
 
 
+# Mesh Logic needs update here, use morphed along the cuvre
 
-crvs,planes=main(npz_path,
-                 preview_length=None,
-                 guide_curve=GuideCurve)
+# crvs,planes,mesh=main(npz_path,
+#                  preview_length=None,
+#                  guide_curve=GuideCurve)
 
 # print crvs data structure layers
-print(f"crvs type: {type(crvs)}")
-print(f"crvs length: {len(crvs)}")
-print(f"crvs[0] type: {type(crvs[0])}")
-print(f"crvs[0] length: {len(crvs[0])}")
-print(f"crvs[0][0] type: {type(crvs[0][0])}")
+# print(f"crvs type: {type(crvs)}")
+# print(f"crvs length: {len(crvs)}")
+# print(f"crvs[0] type: {type(crvs[0])}")
+# print(f"crvs[0] length: {len(crvs[0])}")
+# print(f"crvs[0][0] type: {type(crvs[0][0])}")
 
 
 # crv_tree = Grasshopper.DataTree[Rhino.Geometry.Curve]()
@@ -849,18 +1004,19 @@ print(f"crvs[0][0] type: {type(crvs[0][0])}")
 #     for crv in crvs[i]:
 #         crv_tree.Add(crv, path)
 
-a = tr.list_to_tree(crvs,True)
-# a = crv_tree
-b = tr.list_to_tree(planes)
+# a = tr.list_to_tree(crvs,True)
+# # a = crv_tree
+# b = mesh
 
 # Mesh smoke test + hints (GH CPython):
-# helper = SdfGhHelper(npz_path, field="result_fields", iso_level=0.0)
-# helper.load()
-# helper.load_crv(curve)  # evenly distributed frames by slice count
-# sdf_stack = helper.build_interpolated_stack(target_count=60)
-# sdf_stack = helper.redistance_stack(sdf_stack)
-# TODO: mesh = helper.stack_to_mesh(sdf_stack)
+helper = SdfGhHelper(npz_path, field="bracing_fields", iso_level=0.0)
+helper.load(max_slices=60)
+helper.load_crv(GuideCurve)  # evenly distributed frames by slice count
+sdf_stack = helper.build_interpolated_stack(target_count=120)
+sdf_stack = helper.redistance_stack(sdf_stack)
+mesh = helper.stack_to_mesh(sdf_stack) 
+a = mesh
 # Hints:
 # - use planar curves for stable PerpendicularFrameAt
 # - if you already have frames, pass them into load_crv(frames=frames)
-# - align target_count with your desired mesh detail and memory budget
+# - mesh generation requires scikit-image for marching cubes
