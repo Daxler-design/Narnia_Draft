@@ -944,14 +944,17 @@ def main(npz_path: str,
     helper = SdfGhHelper(npz_path, field="bracing_fields", iso_level=0.0)
     helper.load(max_slices_load)
     helper.load_crv(guide_curve) if guide_curve is not None else None
-    shape = np.shape(helper.sdf_stack)
+    
 
-    print(f"slice_number = {shape[0]}, shape_size = {shape[-2:]}")
-
-    # sdf_interpolated = helper.build_interpolated_stack(target_count=500)
+    
+    sdf_interpolated = helper.build_interpolated_stack(target_count=50)
     # sdf_redist = helper.redistance_stack()
     # optional: replace current stack
-    # helper.sdf_stack = sdf_redist
+    helper.sdf_stack = sdf_interpolated
+
+    shape = np.shape(helper.sdf_stack)
+    print(f"slice_number = {shape[0]}, shape_size = {shape[-2:]}")
+
     if preview_length is not None and preview_length > 0:
         sdf_count = min(preview_length, shape[0])
     else:
@@ -961,24 +964,25 @@ def main(npz_path: str,
     for i in range(sdf_count):
 
         sdf = helper.get_slice(i)
-        target_pln = helper.guiding_planes[i]
-        target_pln = rg.Plane(target_pln.Origin, target_pln.YAxis, target_pln.XAxis)
-        xform = rg.Transform.PlaneToPlane(
-            rg.Plane.WorldXY, target_pln
-        )
+        # target_pln = helper.guiding_planes[i]
+        # target_pln = rg.Plane(target_pln.Origin, target_pln.YAxis, target_pln.XAxis)
+        # xform = rg.Transform.PlaneToPlane(
+        #     rg.Plane.WorldXY, target_pln
+        # )
         segments = helper.slice_to_segments(sdf)
         polylines = helper.segments_to_polylines(segments)
         curves = helper.polylines_to_curves(polylines)
         oriented_contours = []
         for crv in curves:
             c = crv.DuplicateCurve()
-            c.Transform(xform)
+            # c.Transform(xform)
             oriented_contours.append(c)
 
         planes.append(helper.get_slice_plane(i))
         crv_list.append(oriented_contours)
     # print(f"crv_list  has {len(crv_list)} \n")
-    mesh = helper.stack_to_mesh(helper.sdf_stack)
+    # mesh = helper.stack_to_mesh(helper.sdf_stack)
+    mesh = rg.Mesh()
     print(crv_list[0])
 
     return crv_list, planes, mesh
@@ -986,37 +990,37 @@ def main(npz_path: str,
 
 # Mesh Logic needs update here, use morphed along the cuvre
 
-# crvs,planes,mesh=main(npz_path,
-#                  preview_length=None,
-#                  guide_curve=GuideCurve)
+crvs,planes,mesh=main(npz_path,
+                 preview_length=None,
+                 guide_curve=None)
 
 # print crvs data structure layers
-# print(f"crvs type: {type(crvs)}")
-# print(f"crvs length: {len(crvs)}")
-# print(f"crvs[0] type: {type(crvs[0])}")
-# print(f"crvs[0] length: {len(crvs[0])}")
+print(f"crvs type: {type(crvs)}")
+print(f"crvs length: {len(crvs)}")
+print(f"crvs[0] type: {type(crvs[0])}")
+print(f"crvs[0] length: {len(crvs[0])}")
 # print(f"crvs[0][0] type: {type(crvs[0][0])}")
 
 
-# crv_tree = Grasshopper.DataTree[Rhino.Geometry.Curve]()
-# for i in range(len(crvs)):
-#     path = Grasshopper.Kernel.Data.GH_Path(i)
-#     for crv in crvs[i]:
-#         crv_tree.Add(crv, path)
+crv_tree = Grasshopper.DataTree[Rhino.Geometry.Curve]()
+for i in range(len(crvs)):
+    path = Grasshopper.Kernel.Data.GH_Path(i)
+    for crv in crvs[i]:
+        crv_tree.Add(crv, path)
 
-# a = tr.list_to_tree(crvs,True)
-# # a = crv_tree
-# b = mesh
+a = tr.list_to_tree(crvs,True)
+# a = crv_tree
+b = mesh
 
 # Mesh smoke test + hints (GH CPython):
-helper = SdfGhHelper(npz_path, field="bracing_fields", iso_level=0.0)
-helper.load(max_slices=60)
-helper.load_crv(GuideCurve)  # evenly distributed frames by slice count
-sdf_stack = helper.build_interpolated_stack(target_count=120)
-sdf_stack = helper.redistance_stack(sdf_stack)
-mesh = helper.stack_to_mesh(sdf_stack) 
-a = mesh
-# Hints:
+# helper = SdfGhHelper(npz_path, field="bracing_fields", iso_level=0.0)
+# helper.load(max_slices=60)
+# helper.load_crv(GuideCurve)  # evenly distributed frames by slice count
+# sdf_stack = helper.build_interpolated_stack(target_count=120)
+# sdf_stack = helper.redistance_stack(sdf_stack)
+# mesh = helper.stack_to_mesh(sdf_stack) 
+# a = mesh
+# # Hints:
 # - use planar curves for stable PerpendicularFrameAt
 # - if you already have frames, pass them into load_crv(frames=frames)
 # - mesh generation requires scikit-image for marching cubes

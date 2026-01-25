@@ -100,6 +100,7 @@ def load_sdf_list_from_inshapes(json_path, nx=256, ny=256, branch_index=0):
     polys = data["shapes"][branch_index]["polys"]
     sdfs = [poly_to_true_sdf(poly, bbox_min, bbox_max, nx=nx, ny=ny) for poly in polys]
     return sdfs
+
 def interpolate_true_sdf_profiles_world(
     sdf_profiles: List[np.ndarray],
     bbox_min: List[float],
@@ -162,7 +163,9 @@ def interpolate_true_sdf_profiles_world(
 
 
 
-# ------------------------------------------------------------------------------
+# --------------------------
+# Bracing Generation Voronoi 
+# --------------------------
 
 def generate_centroids(mask: np.ndarray, k: int = 3, prev_centroids: Optional[np.ndarray] = None, seed: int = 42) -> np.ndarray:
     """
@@ -487,7 +490,193 @@ def generate_bracing_cavity_static_world(sdf_profiles, iso_level_offset, nx, ny,
 
     return bracing_cavities_sdf
 
+# --------------------------
+# Bracing Generation Curve Guides
+# --------------------------
 
+"""
+This method will introduce n curves as bracing gudies defined in inShapes.json, 
+in each slice read from inShapes.json, there will be coresponding bracing guide cuvres,
+logic is simple, for each slice, we will create true sdfs based on world units.
+
+profile_sdf from the profiles curves,
+profile_sdf_offset = profile_sdf + iso_level_offset (positive value is offset inward), this offset value reflects the thin wall thickness (m) we want to keep
+bracing_ridge_sdf from the bracing ridge guide curve, with ridge thickness defined in world units (m), this should be masked inside the profile_sdf_offset area
+bracing_cavity_sdf = np.maximum(profile_sdf_offset, -bracing_ridge_sdf)
+
+
+
+"""
+
+def _normalize_polys_to_slices(entries, branch_index=None):
+    """
+    Normalize inShapes JSON entries into a list of slices,
+    where each slice is a list of polylines (each polyline is a list of points).
+    """
+    if not entries:
+        return []
+
+    if branch_index is not None:
+        entries = [entries[branch_index]]
+
+    if len(entries) == 1:
+        polys = entries[0].get("polys", [])
+        if not polys:
+            return []
+        first = polys[0]
+        if first and isinstance(first[0], (int, float)):
+            return [[polys]]
+        return [[poly] for poly in polys]
+
+    return [entry.get("polys", []) for entry in entries]
+
+
+def load_profile_sdf_slices_from_inshapes(json_path, nx=256, ny=256, branch_index=None):
+    """
+    Load profile polylines from inShapes.json and return per-slice true SDFs.
+    """
+    data = json.loads(Path(json_path).read_text())
+    bbox_min = data["bbox"]["minbb"]
+    bbox_max = data["bbox"]["maxbb"]
+
+    slice_polys = _normalize_polys_to_slices(data.get("shapes", []), branch_index)
+    if not slice_polys:
+        raise ValueError("No shape polylines found in inShapes.json.")
+
+    sdfs = []
+    for polys in slice_polys:
+        if not polys:
+            raise ValueError("Encountered empty shape slice in inShapes.json.")
+        if len(polys) == 1:
+            sdf = poly_to_true_sdf(polys[0], bbox_min, bbox_max, nx=nx, ny=ny)
+        else:
+            sdf_list = [poly_to_true_sdf(poly, bbox_min, bbox_max, nx=nx, ny=ny) for poly in polys]
+            sdf = np.minimum.reduce(sdf_list)
+        sdfs.append(sdf)
+    return sdfs, bbox_min, bbox_max
+
+
+def load_ridge_polylines_from_inshapes(json_path, branch_index=None):
+    """
+    Load ridge guide polylines from inShapes.json and return per-slice lists.
+    """
+    data = json.loads(Path(json_path).read_text())
+    return _normalize_polys_to_slices(data.get("ridge", []), branch_index)
+
+
+def polyline_ridge_sdf_world(polys, bbox_min, bbox_max, nx=256, ny=256, ridge_thickness=0.02):
+    """
+    Compute true SDF of ridge polylines with world-unit thickness.
+    Negative inside ridge band, positive outside.
+    """
+    if not polys:
+        return np.ones((ny, nx), dtype=float) * float(ridge_thickness)
+
+    xmin, ymin = float(bbox_min[0]), float(bbox_min[1])
+    xmax, ymax = float(bbox_max[0]), float(bbox_max[1])
+
+    xs = np.linspace(xmin, xmax, nx)
+    ys = np.linspace(ymin, ymax, ny)
+    Xw, Yw = np.meshgrid(xs, ys, indexing="xy")
+    grid = np.stack([Xw.ravel(), Yw.ravel()], axis=-1)
+
+    min_dists = np.full(grid.shape[0], np.inf, dtype=float)
+    for poly in polys:
+        pts = np.asarray(poly, dtype=float)[:, :2]
+        if pts.shape[0] < 2:
+            continue
+        for a, b in zip(pts[:-1], pts[1:]):
+            if np.linalg.norm(a - b) < 1e-12:
+                continue
+            dists = point_to_segment_distance(grid, a, b)
+            min_dists = np.minimum(min_dists, dists)
+
+    if not np.isfinite(min_dists).any():
+        return np.ones((ny, nx), dtype=float) * float(ridge_thickness)
+
+    sdf_flat = min_dists - float(ridge_thickness)
+    return sdf_flat.reshape((ny, nx))
+
+
+def generate_bracing_cavity_guided_world(
+    sdf_profiles,
+    ridge_polys_slices,
+    bbox_min,
+    bbox_max,
+    nx,
+    ny,
+    iso_level_offset,
+    ridge_thickness,
+    debug_interval=10,
+    debugOutput=False,
+):
+    """
+    Generate bracing cavities using ridge guide polylines (world units).
+    """
+    num_slice = len(sdf_profiles)
+    bracing_cavities_sdf = np.zeros((num_slice, ny, nx))
+
+    if not ridge_polys_slices:
+        ridge_polys_slices = [[] for _ in range(num_slice)]
+    elif len(ridge_polys_slices) != num_slice:
+        if len(ridge_polys_slices) == 1:
+            ridge_polys_slices = ridge_polys_slices * num_slice
+        else:
+            raise ValueError(
+                f"ridge_polys_slices length {len(ridge_polys_slices)} does not match num_slice {num_slice}."
+            )
+
+    for i in range(num_slice):
+        slice_2d = sdf_profiles[i]
+        if isinstance(ridge_thickness, (list, tuple, np.ndarray)):
+            thickness_i = ridge_thickness[i]
+        else:
+            thickness_i = ridge_thickness
+
+        ridge_sdf = polyline_ridge_sdf_world(
+            ridge_polys_slices[i],
+            bbox_min=bbox_min,
+            bbox_max=bbox_max,
+            nx=nx,
+            ny=ny,
+            ridge_thickness=thickness_i,
+        )
+
+        profile_slice_offset = slice_2d + iso_level_offset
+        bracing_cavity = np.maximum(profile_slice_offset, -ridge_sdf)
+        bracing_cavities_sdf[i] = bracing_cavity
+
+        if debugOutput and (i % debug_interval == 0):
+            debug.output_debug_plot_world_offsets(
+                ridge_sdf,
+                bbox_min=bbox_min,
+                bbox_max=bbox_max,
+                nx=nx,
+                ny=ny,
+                slice_idx=i,
+                offset_step_world=0.01,
+                offset_max_world=0.01,
+                file_name_prefix="ridge_sdf",
+            )
+
+            debug.output_debug_plot_world_offsets(
+                bracing_cavity,
+                bbox_min=bbox_min,
+                bbox_max=bbox_max,
+                nx=nx,
+                ny=ny,
+                slice_idx=i,
+                offset_step_world=0.01,
+                file_name_prefix="bracing_cavity_sdf",
+            )
+
+    return bracing_cavities_sdf
+
+
+
+# --------------------------
+# IO utils
+# --------------------------
 def save_npz_for_gui(
     output_path,
     result_fields_3d,
@@ -613,16 +802,14 @@ def save_npz_for_gui(
 # ------------------------------------------------------------------------------
 
 
-#  try directtly from curve shapes
-with open("alice_result/inShapes.json", 'r') as f:
-    shape_data = json.load(f)
-    bbox_min = shape_data["bbox"]["minbb"]
-    bbox_max = shape_data["bbox"]["maxbb"]
-
 # 1. need convert polylines to true sdfs
 nx = 512
 ny = 512
-sdf_profiles = load_sdf_list_from_inshapes("alice_result/inShapes.json", nx=nx, ny=ny, branch_index=0)
+sdf_profiles, bbox_min, bbox_max = load_profile_sdf_slices_from_inshapes(
+    "alice_result/inShapes.json",
+    nx=nx,
+    ny=ny,
+)
 print(f"Loaded {len(sdf_profiles)} SDF profiles from inShapes.json \n")
 # pre-intepolate to target number of slices
 # target_num_slices = 100
@@ -645,26 +832,50 @@ for i, sdf in enumerate(sdf_profiles):
             offset_step_world=0.05,offset_max_world=0.5,
             file_name_prefix="profile_sdf")
         
-# 2. generate bracing cavitys sdf profiles
 
-sigma_values = sigma_list_generate(min_sigma=0.02, max_sigma=0.035, num_slices=len(sdf_profiles), method="ease")
+# 2. generate bracing cavitys sdf profiles_ voronoi static method
 
-bracing_cavitys_sdf = generate_bracing_cavity_static_world(
+# sigma_values = sigma_list_generate(min_sigma=0.02, max_sigma=0.035, num_slices=len(sdf_profiles), method="ease")
+
+# bracing_cavitys_sdf = generate_bracing_cavity_static_world(
+#     sdf_profiles,
+#     iso_level_offset=0.02,
+#     nx=nx,
+#     ny=ny,
+#     k=5,
+#     seed=42,
+#     sigma_world=sigma_values,
+#     debug_interval=10,
+#     debugOutput=False)
+
+# --------------------------------------------------------        
+# 2. generate bracing cavitys sdf profiles (ridge guide method)
+ridge_polys_slices = load_ridge_polylines_from_inshapes("alice_result/inShapes.json")
+ridge_thickness_values = sigma_list_generate(
+    min_sigma=0.02,
+    max_sigma=0.035,
+    num_slices=len(sdf_profiles),
+    method="ease",
+)
+
+bracing_cavitys_sdf = generate_bracing_cavity_guided_world(
     sdf_profiles,
-    iso_level_offset=0.02,
+    ridge_polys_slices,
+    bbox_min=bbox_min,
+    bbox_max=bbox_max,
     nx=nx,
     ny=ny,
-    k=5,
-    seed=42,
-    sigma_world=sigma_values,
+    iso_level_offset=0.02,
+    ridge_thickness=ridge_thickness_values,
     debug_interval=10,
-    debugOutput=False)
+    debugOutput=False,
+)
 
 bracing_sdf_result = np.maximum(np.asarray(sdf_profiles), -bracing_cavitys_sdf)
 
 # 3. output thin wall profile with bracing cavity sdf profiles (debug previews)
 for i in range(len(bracing_sdf_result)):
-    if i % 5 == 0:
+    if i % 2 == 0:
         bracing_slice = bracing_sdf_result[i]
         debug.output_debug_plot_world_offsets(
             bracing_slice,
