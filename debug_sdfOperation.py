@@ -598,49 +598,99 @@ def polyline_ridge_sdf_world(polys, bbox_min, bbox_max, nx=256, ny=256, ridge_th
     return sdf_flat.reshape((ny, nx))
 
 
+def _extend_point_to_bbox_2d(point_xy, direction_xy, bbox_min, bbox_max, eps=1e-9):
+    xmin, ymin = float(bbox_min[0]), float(bbox_min[1])
+    xmax, ymax = float(bbox_max[0]), float(bbox_max[1])
+    dx, dy = float(direction_xy[0]), float(direction_xy[1])
+    if abs(dx) < eps and abs(dy) < eps:
+        return np.asarray(point_xy, dtype=float)
+
+    candidates = []
+    if abs(dx) >= eps:
+        for x in (xmin, xmax):
+            t = (x - point_xy[0]) / dx
+            if t > eps:
+                y = point_xy[1] + t * dy
+                if ymin - eps <= y <= ymax + eps:
+                    candidates.append((t, x, y))
+    if abs(dy) >= eps:
+        for y in (ymin, ymax):
+            t = (y - point_xy[1]) / dy
+            if t > eps:
+                x = point_xy[0] + t * dx
+                if xmin - eps <= x <= xmax + eps:
+                    candidates.append((t, x, y))
+
+    if not candidates:
+        return np.asarray(point_xy, dtype=float)
+
+    _, x_hit, y_hit = min(candidates, key=lambda c: c[0])
+    return np.array([x_hit, y_hit], dtype=float)
+
+
+def extend_polyline_to_bbox(poly_xyz, bbox_min, bbox_max, eps=1e-9):
+    """
+    Extend polyline endpoints to the bbox along the tangent directions.
+    """
+    pts = np.asarray(poly_xyz, dtype=float)
+    if pts.shape[0] < 2:
+        return poly_xyz
+
+    def _first_non_degenerate(start, step):
+        idx = start + step
+        while 0 <= idx < pts.shape[0]:
+            if np.linalg.norm(pts[start, :2] - pts[idx, :2]) > eps:
+                return pts[idx, :2]
+            idx += step
+        return None
+
+    start_next = _first_non_degenerate(0, 1)
+    end_prev = _first_non_degenerate(pts.shape[0] - 1, -1)
+
+    start_dir = pts[0, :2] - start_next if start_next is not None else np.array([0.0, 0.0])
+    end_dir = pts[-1, :2] - end_prev if end_prev is not None else np.array([0.0, 0.0])
+
+    new_start_xy = _extend_point_to_bbox_2d(pts[0, :2], start_dir, bbox_min, bbox_max)
+    new_end_xy = _extend_point_to_bbox_2d(pts[-1, :2], end_dir, bbox_min, bbox_max)
+
+    new_pts = pts.copy()
+    if np.linalg.norm(new_start_xy - pts[0, :2]) > eps:
+        z = pts[0, 2] if pts.shape[1] > 2 else 0.0
+        new_pts = np.vstack([np.array([new_start_xy[0], new_start_xy[1], z]), new_pts])
+    if np.linalg.norm(new_end_xy - pts[-1, :2]) > eps:
+        z = pts[-1, 2] if pts.shape[1] > 2 else 0.0
+        new_pts = np.vstack([new_pts, np.array([new_end_xy[0], new_end_xy[1], z])])
+
+    return new_pts.tolist()
+
+
 def generate_bracing_cavity_guided_world(
     sdf_profiles,
-    ridge_polys_slices,
+    ridge_sdf_slices,
     bbox_min,
     bbox_max,
     nx,
     ny,
     iso_level_offset,
-    ridge_thickness,
     debug_interval=10,
     debugOutput=False,
 ):
     """
-    Generate bracing cavities using ridge guide polylines (world units).
+    Generate bracing cavities using precomputed ridge SDF slices (world units).
     """
     num_slice = len(sdf_profiles)
     bracing_cavities_sdf = np.zeros((num_slice, ny, nx))
 
-    if not ridge_polys_slices:
-        ridge_polys_slices = [[] for _ in range(num_slice)]
-    elif len(ridge_polys_slices) != num_slice:
-        if len(ridge_polys_slices) == 1:
-            ridge_polys_slices = ridge_polys_slices * num_slice
-        else:
-            raise ValueError(
-                f"ridge_polys_slices length {len(ridge_polys_slices)} does not match num_slice {num_slice}."
-            )
+    if ridge_sdf_slices is None or len(ridge_sdf_slices) == 0:
+        ridge_sdf_slices = [np.zeros((ny, nx), dtype=float) for _ in range(num_slice)]
+    elif len(ridge_sdf_slices) != num_slice:
+        raise ValueError(
+            f"ridge_sdf_slices length {len(ridge_sdf_slices)} does not match num_slice {num_slice}."
+        )
 
     for i in range(num_slice):
         slice_2d = sdf_profiles[i]
-        if isinstance(ridge_thickness, (list, tuple, np.ndarray)):
-            thickness_i = ridge_thickness[i]
-        else:
-            thickness_i = ridge_thickness
-
-        ridge_sdf = polyline_ridge_sdf_world(
-            ridge_polys_slices[i],
-            bbox_min=bbox_min,
-            bbox_max=bbox_max,
-            nx=nx,
-            ny=ny,
-            ridge_thickness=thickness_i,
-        )
+        ridge_sdf = np.asarray(ridge_sdf_slices[i], dtype=float)
 
         profile_slice_offset = slice_2d + iso_level_offset
         bracing_cavity = np.maximum(profile_slice_offset, -ridge_sdf)
@@ -812,14 +862,14 @@ sdf_profiles, bbox_min, bbox_max = load_profile_sdf_slices_from_inshapes(
 )
 print(f"Loaded {len(sdf_profiles)} SDF profiles from inShapes.json \n")
 # pre-intepolate to target number of slices
-# target_num_slices = 100
-# sdf_profiles = interpolate_true_sdf_profiles_world(
-#     sdf_profiles,
-#     bbox_min=bbox_min,
-#     bbox_max=bbox_max,
-#     target_count=target_num_slices,
-#     redistance=True
-# )
+target_num_slices = len(sdf_profiles) * 2  # e.g., double the slices
+sdf_profiles = interpolate_true_sdf_profiles_world(
+    sdf_profiles,
+    bbox_min=bbox_min,
+    bbox_max=bbox_max,
+    target_count=target_num_slices,
+    redistance=True
+)
 
 print(f"Loaded {len(sdf_profiles)} SDF profiles interpolated \n")
 for i, sdf in enumerate(sdf_profiles):
@@ -852,21 +902,59 @@ for i, sdf in enumerate(sdf_profiles):
 # 2. generate bracing cavitys sdf profiles (ridge guide method)
 ridge_polys_slices = load_ridge_polylines_from_inshapes("alice_result/inShapes.json")
 ridge_thickness_values = sigma_list_generate(
-    min_sigma=0.02,
+    min_sigma=0.03,
     max_sigma=0.035,
-    num_slices=len(sdf_profiles),
+    num_slices=len(ridge_polys_slices),
     method="ease",
 )
 
+ridge_sdf_slices = []
+for i, polys in enumerate(ridge_polys_slices):
+    extended_polys = [extend_polyline_to_bbox(poly, bbox_min, bbox_max) for poly in polys]
+    if isinstance(ridge_thickness_values, (list, tuple, np.ndarray)):
+        thickness_i = ridge_thickness_values[i]
+    else:
+        thickness_i = ridge_thickness_values
+    ridge_sdf_slices.append(
+        polyline_ridge_sdf_world(
+            extended_polys,
+            bbox_min=bbox_min,
+            bbox_max=bbox_max,
+            nx=nx,
+            ny=ny,
+            ridge_thickness=thickness_i,
+        )
+    )
+
+# we need extend the ridge to the borders of the field, so we can get correct bracing cavitys sdf profiles after interpolation
+
+
+if ridge_sdf_slices:
+    ridge_sdf_slices = interpolate_true_sdf_profiles_world(
+        ridge_sdf_slices,
+        bbox_min=bbox_min,
+        bbox_max=bbox_max,
+        target_count=target_num_slices,
+        redistance=True,
+    )
+
+ridge_thickness_values = sigma_list_generate(
+    min_sigma=0.03/2,
+    max_sigma=0.035/2,
+    num_slices=len(ridge_sdf_slices),
+    method="ease",
+)
+
+print(f"Loaded {len(ridge_sdf_slices)} ridge SDF slices \n")
+
 bracing_cavitys_sdf = generate_bracing_cavity_guided_world(
     sdf_profiles,
-    ridge_polys_slices,
+    ridge_sdf_slices,
     bbox_min=bbox_min,
     bbox_max=bbox_max,
     nx=nx,
     ny=ny,
     iso_level_offset=0.02,
-    ridge_thickness=ridge_thickness_values,
     debug_interval=10,
     debugOutput=False,
 )
@@ -875,7 +963,7 @@ bracing_sdf_result = np.maximum(np.asarray(sdf_profiles), -bracing_cavitys_sdf)
 
 # 3. output thin wall profile with bracing cavity sdf profiles (debug previews)
 for i in range(len(bracing_sdf_result)):
-    if i % 2 == 0:
+    if i % 10 == 0:
         bracing_slice = bracing_sdf_result[i]
         debug.output_debug_plot_world_offsets(
             bracing_slice,

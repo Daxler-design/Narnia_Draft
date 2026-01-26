@@ -947,10 +947,10 @@ def main(npz_path: str,
     
 
     
-    sdf_interpolated = helper.build_interpolated_stack(target_count=50)
+    # sdf_interpolated = helper.build_interpolated_stack(target_count=50)
     # sdf_redist = helper.redistance_stack()
     # optional: replace current stack
-    helper.sdf_stack = sdf_interpolated
+    # helper.sdf_stack = sdf_interpolated
 
     shape = np.shape(helper.sdf_stack)
     print(f"slice_number = {shape[0]}, shape_size = {shape[-2:]}")
