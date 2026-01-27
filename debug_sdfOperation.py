@@ -159,8 +159,67 @@ def interpolate_true_sdf_profiles_world(
             interp = (1.0 - t) * stack[i0] + t * stack[i1]
         new_stack[i] = _redistance(interp) if redistance else interp
 
+    print(
+        f"Interpolate (method={method}, target_count={target_count}) "
+        f"slices: {source_count} -> {new_stack.shape[0]}"
+    )
     return new_stack
 
+
+def interpolate_true_sdf_profiles_insert_between(
+    sdf_profiles: List[np.ndarray],
+    bbox_min: List[float],
+    bbox_max: List[float],
+    insert_count: int = 1,
+    redistance: bool = True,
+) -> np.ndarray:
+    """
+    Insert interpolated slices between neighbors without reparameterizing endpoints.
+    """
+    stack = np.asarray(sdf_profiles, dtype=float)
+    if stack.ndim != 3:
+        raise ValueError("sdf_profiles must be a list of 2D arrays (num_slices, ny, nx).")
+
+    source_count, ny, nx = stack.shape
+    if source_count == 0:
+        raise ValueError("sdf_profiles is empty.")
+
+    insert_count = int(insert_count)
+    if insert_count <= 0:
+        print(
+            f"Interpolate (method=insert_between, insert_count=0) "
+            f"slices: {source_count} -> {source_count}"
+        )
+        return stack.copy()
+
+    xmin, ymin = float(bbox_min[0]), float(bbox_min[1])
+    xmax, ymax = float(bbox_max[0]), float(bbox_max[1])
+    dx = (xmax - xmin) / (nx - 1) if nx > 1 else 0.0
+    dy = (ymax - ymin) / (ny - 1) if ny > 1 else 0.0
+
+    def _redistance(slice_2d: np.ndarray) -> np.ndarray:
+        mask = slice_2d <= 0.0
+        dist_in = distance_transform_edt(mask, sampling=(dy, dx))
+        dist_out = distance_transform_edt(~mask, sampling=(dy, dx))
+        return dist_out - dist_in
+
+    new_slices = []
+    for i in range(source_count - 1):
+        s0 = stack[i]
+        s1 = stack[i + 1]
+        new_slices.append(s0)
+        for j in range(1, insert_count + 1):
+            t = j / float(insert_count + 1)
+            interp = (1.0 - t) * s0 + t * s1
+            new_slices.append(_redistance(interp) if redistance else interp)
+    new_slices.append(stack[-1])
+
+    new_stack = np.stack(new_slices, axis=0)
+    print(
+        f"Interpolate (method=insert_between, insert_count={insert_count}) "
+        f"slices: {source_count} -> {new_stack.shape[0]}"
+    )
+    return new_stack
 
 
 # --------------------------
@@ -862,14 +921,30 @@ sdf_profiles, bbox_min, bbox_max = load_profile_sdf_slices_from_inshapes(
 )
 print(f"Loaded {len(sdf_profiles)} SDF profiles from inShapes.json \n")
 # pre-intepolate to target number of slices
-target_num_slices = len(sdf_profiles) * 2  # e.g., double the slices
-sdf_profiles = interpolate_true_sdf_profiles_world(
-    sdf_profiles,
-    bbox_min=bbox_min,
-    bbox_max=bbox_max,
-    target_count=target_num_slices,
-    redistance=True
-)
+use_insert_interpolation = True
+insert_between = 1
+target_num_slices = None  # set when use_insert_interpolation is False
+
+if use_insert_interpolation:
+    if target_num_slices is not None:
+        raise ValueError("insert_between is enabled; set target_num_slices=None.")
+    sdf_profiles = interpolate_true_sdf_profiles_insert_between(
+        sdf_profiles,
+        bbox_min=bbox_min,
+        bbox_max=bbox_max,
+        insert_count=insert_between,
+        redistance=True,
+    )
+else:
+    if target_num_slices is None:
+        raise ValueError("target_num_slices is required when insert_between is disabled.")
+    sdf_profiles = interpolate_true_sdf_profiles_world(
+        sdf_profiles,
+        bbox_min=bbox_min,
+        bbox_max=bbox_max,
+        target_count=target_num_slices,
+        redistance=True,
+    )
 
 print(f"Loaded {len(sdf_profiles)} SDF profiles interpolated \n")
 for i, sdf in enumerate(sdf_profiles):
@@ -930,13 +1005,22 @@ for i, polys in enumerate(ridge_polys_slices):
 
 
 if ridge_sdf_slices:
-    ridge_sdf_slices = interpolate_true_sdf_profiles_world(
-        ridge_sdf_slices,
-        bbox_min=bbox_min,
-        bbox_max=bbox_max,
-        target_count=target_num_slices,
-        redistance=True,
-    )
+    if use_insert_interpolation:
+        ridge_sdf_slices = interpolate_true_sdf_profiles_insert_between(
+            ridge_sdf_slices,
+            bbox_min=bbox_min,
+            bbox_max=bbox_max,
+            insert_count=insert_between,
+            redistance=True,
+        )
+    else:
+        ridge_sdf_slices = interpolate_true_sdf_profiles_world(
+            ridge_sdf_slices,
+            bbox_min=bbox_min,
+            bbox_max=bbox_max,
+            target_count=target_num_slices,
+            redistance=True,
+        )
 
 ridge_thickness_values = sigma_list_generate(
     min_sigma=0.03/2,

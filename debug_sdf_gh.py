@@ -937,11 +937,12 @@ b: Any
 # ----------
 
 def main(npz_path: str, 
+         field: str = "bracing_fields",
          preview_length: Optional[int] = None, 
          max_slices_load: Optional[int] = None,
          guide_curve: Optional[Rhino.Geometry.Curve] = None):
 
-    helper = SdfGhHelper(npz_path, field="bracing_fields", iso_level=0.0)
+    helper = SdfGhHelper(npz_path, field=field, iso_level=0.0)
     helper.load(max_slices_load)
     helper.load_crv(guide_curve) if guide_curve is not None else None
     
@@ -972,6 +973,8 @@ def main(npz_path: str,
         segments = helper.slice_to_segments(sdf)
         polylines = helper.segments_to_polylines(segments)
         curves = helper.polylines_to_curves(polylines)
+        helper.smooth_iters = 5
+        curves = helper.smooth_curves(curves, method="native")
         oriented_contours = []
         for crv in curves:
             c = crv.DuplicateCurve()
@@ -991,6 +994,12 @@ def main(npz_path: str,
 # Mesh Logic needs update here, use morphed along the cuvre
 
 crvs,planes,mesh=main(npz_path,
+                      field="bracing_fields",
+                 preview_length=None,
+                 guide_curve=None)
+
+crvs_1,planes,mesh=main(npz_path,
+                      field="profile_fields",
                  preview_length=None,
                  guide_curve=None)
 
@@ -1002,15 +1011,15 @@ print(f"crvs[0] length: {len(crvs[0])}")
 # print(f"crvs[0][0] type: {type(crvs[0][0])}")
 
 
-crv_tree = Grasshopper.DataTree[Rhino.Geometry.Curve]()
-for i in range(len(crvs)):
-    path = Grasshopper.Kernel.Data.GH_Path(i)
-    for crv in crvs[i]:
-        crv_tree.Add(crv, path)
+# crv_tree = Grasshopper.DataTree[Rhino.Geometry.Curve]()
+# for i in range(len(crvs)):
+#     path = Grasshopper.Kernel.Data.GH_Path(i)
+#     for crv in crvs[i]:
+#         crv_tree.Add(crv, path)
 
 a = tr.list_to_tree(crvs,True)
 # a = crv_tree
-b = mesh
+b = tr.list_to_tree(crvs_1,True)
 
 # Mesh smoke test + hints (GH CPython):
 # helper = SdfGhHelper(npz_path, field="bracing_fields", iso_level=0.0)
