@@ -836,77 +836,6 @@ def save_npz_for_gui(
 
 
 
-# NOT-USE: this method has problems with infinite ridges
-# def compute_voronoi_ridge_sdf_world(
-#     shape: Tuple[int, int],
-#     centroids: np.ndarray,                 # (k,2) in (y,x) pixel coords
-#     ridge_thickness: float = 1.0,          # if bbox provided: WORLD units; else: PIXEL units
-#     bbox_min: Optional[list] = None,       # [x,y,z]
-#     bbox_max: Optional[list] = None,       # [x,y,z]
-# ) -> np.ndarray:
-#     ny, nx = shape
-
-#     # -----------------------
-#     # Choose coordinate system
-#     # -----------------------
-#     if bbox_min is None or bbox_max is None:
-#         # ===== Original behavior: PIXEL space =====
-#         # centroids are (y,x) but Euclidean points should be (x,y)
-#         pts = np.stack([centroids[:, 1], centroids[:, 0]], axis=1)  # (x,y) in pixels
-
-#         # Grid points in pixel coords (x,y)
-#         Y, X = np.indices((ny, nx))
-#         grid_points = np.stack([X.ravel(), Y.ravel()], axis=-1)      # (x,y) pixels
-
-#         thickness = float(ridge_thickness)  # pixels
-
-#     else:
-#         # ===== World behavior: WORLD space =====
-#         xmin, ymin = float(bbox_min[0]), float(bbox_min[1])
-#         xmax, ymax = float(bbox_max[0]), float(bbox_max[1])
-
-#         # centroids: (y,x) pixel -> (x,y) world
-#         cx = xmin + (centroids[:, 1] / (nx - 1)) * (xmax - xmin)
-#         cy = ymin + (centroids[:, 0] / (ny - 1)) * (ymax - ymin)
-#         pts = np.stack([cx, cy], axis=1)  # (x,y) world
-
-#         # Grid points: (row,col) -> (x,y) world
-#         xs = np.linspace(xmin, xmax, nx)
-#         ys = np.linspace(ymin, ymax, ny)
-#         Xw, Yw = np.meshgrid(xs, ys, indexing="xy")                 # (ny,nx)
-#         grid_points = np.stack([Xw.ravel(), Yw.ravel()], axis=-1)    # (x,y) world
-
-#         thickness = float(ridge_thickness)  # world units
-
-#     # -----------------------
-#     # Voronoi + finite ridge segments
-#     # -----------------------
-#     # vor = Voronoi(pts)
-#     vor = Voronoi(pts, qhull_options="Qbb Qc Qx QJ")
-
-#     ridge_segments = []
-#     for ridge_vertices in vor.ridge_vertices:
-#         if -1 in ridge_vertices:
-#             continue
-#         v0 = vor.vertices[ridge_vertices[0]]  # (x,y)
-#         v1 = vor.vertices[ridge_vertices[1]]  # (x,y)
-#         ridge_segments.append((v0, v1))
-
-#     if not ridge_segments:
-#         return np.ones((ny, nx), dtype=float) * thickness
-
-#     # -----------------------
-#     # Distance to nearest ridge segment
-#     # -----------------------
-#     min_dists = np.full(grid_points.shape[0], np.inf, dtype=float)
-#     for v0, v1 in ridge_segments:
-#         dists = point_to_segment_distance(grid_points, v0, v1)  # consistent (x,y)
-#         min_dists = np.minimum(min_dists, dists)
-
-#     # Signed distance: negative inside ridge (material), positive outside
-#     sdf = (min_dists - thickness).reshape((ny, nx))
-#     return sdf
-
 
 # ------------------------------------------------------------------------------
 
@@ -921,9 +850,9 @@ sdf_profiles, bbox_min, bbox_max = load_profile_sdf_slices_from_inshapes(
 )
 print(f"Loaded {len(sdf_profiles)} SDF profiles from inShapes.json \n")
 # pre-intepolate to target number of slices
-use_insert_interpolation = True
+use_insert_interpolation = False
 insert_between = 1
-target_num_slices = None  # set when use_insert_interpolation is False
+target_num_slices = len(sdf_profiles)  # set when use_insert_interpolation is False
 
 if use_insert_interpolation:
     if target_num_slices is not None:
@@ -1065,7 +994,7 @@ save_npz_for_gui(
     bounds_min=bbox_min,
     bounds_max=bbox_max,
     iso_level=0.0,
-    total_height=(bbox_max[2] - bbox_min[2]) if len(bbox_max) > 2 else None,
+    total_height=0.0,# z is not needed in this case
 )
 
 

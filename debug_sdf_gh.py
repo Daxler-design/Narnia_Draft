@@ -942,24 +942,27 @@ def main(npz_path: str,
          max_slices_load: Optional[int] = None,
          guide_curve: Optional[Rhino.Geometry.Curve] = None):
 
+    # load data
     helper = SdfGhHelper(npz_path, field=field, iso_level=0.0)
     helper.load(max_slices_load)
     helper.load_crv(guide_curve) if guide_curve is not None else None
     
 
-    
-    # sdf_interpolated = helper.build_interpolated_stack(target_count=50)
-    # sdf_redist = helper.redistance_stack()
-    # optional: replace current stack
-    # helper.sdf_stack = sdf_interpolated
+    # skip interpolation for now, use original slices
 
+    # confirm shape
     shape = np.shape(helper.sdf_stack)
     print(f"slice_number = {shape[0]}, shape_size = {shape[-2:]}")
 
+
+
+    # quick preview 
     if preview_length is not None and preview_length > 0:
         sdf_count = min(preview_length, shape[0])
     else:
         sdf_count = shape[0]
+
+    
     crv_list = []
     planes = []
     for i in range(sdf_count):
